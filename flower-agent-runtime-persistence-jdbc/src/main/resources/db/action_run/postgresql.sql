@@ -1,0 +1,27 @@
+CREATE TABLE action_run (
+    run_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(128) NOT NULL,
+    user_id VARCHAR(128) NOT NULL,
+    trace_id VARCHAR(128) NOT NULL,
+    action_id VARCHAR(255) NOT NULL,
+    proposal_id VARCHAR(128) NOT NULL,
+    requester_id VARCHAR(128) NOT NULL,
+    origin VARCHAR(32) NOT NULL,
+    input_json TEXT NOT NULL,
+    duplicate_key VARCHAR(255) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    current_stage VARCHAR(64) NOT NULL,
+    policy_decision_type VARCHAR(48) NULL,
+    policy_reason VARCHAR(1024) NOT NULL,
+    approval_id VARCHAR(128) NOT NULL,
+    due_at BIGINT NULL,
+    attempt_token VARCHAR(128) NOT NULL,
+    result_status VARCHAR(32) NULL,
+    result_message VARCHAR(2048) NOT NULL DEFAULT '',
+    result_output_json TEXT NOT NULL DEFAULT '{}',
+    failure_reason VARCHAR(2048) NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
+CREATE INDEX idx_action_run_tenant_status ON action_run (tenant_id, status);

@@ -16,6 +16,7 @@
     <modules>
         <module>flower-agent-runtime-core</module>
         <module>flower-agent-runtime-workflow</module>
+        <module>flower-agent-runtime-persistence-jdbc</module>
     </modules>
 
     <properties>
@@ -24,6 +25,8 @@
         <maven.compiler.release>21</maven.compiler.release>
 
         <flower.version>0.1.0-SNAPSHOT</flower.version>
+        <jackson.version>2.21.2</jackson.version>
+        <h2.version>2.2.224</h2.version>
         <junit-jupiter.version>5.10.3</junit-jupiter.version>
         <assertj.version>3.26.3</assertj.version>
 
@@ -46,9 +49,24 @@
                 <version>${project.version}</version>
             </dependency>
             <dependency>
+                <groupId>io.github.parkkevinsb.flower.agent.runtime</groupId>
+                <artifactId>flower-agent-runtime-persistence-jdbc</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>io.github.parkkevinsb.flower</groupId>
                 <artifactId>flower-core</artifactId>
                 <version>${flower.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>${h2.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
