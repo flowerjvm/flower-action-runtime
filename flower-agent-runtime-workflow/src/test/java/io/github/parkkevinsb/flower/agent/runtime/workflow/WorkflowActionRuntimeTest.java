@@ -1,19 +1,19 @@
 package io.github.parkkevinsb.flower.agent.runtime.workflow;
 
-import io.github.parkkevinsb.flower.agent.runtime.ActionDefinition;
-import io.github.parkkevinsb.flower.agent.runtime.ActionEffect;
-import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionContext;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionDefinition;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionEffect;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutionContext;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionResult;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionStatus;
-import io.github.parkkevinsb.flower.agent.runtime.ActionExecutor;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutor;
 import io.github.parkkevinsb.flower.agent.runtime.ActionOrigin;
 import io.github.parkkevinsb.flower.agent.runtime.ActionProposal;
-import io.github.parkkevinsb.flower.agent.runtime.ActionRiskLevel;
-import io.github.parkkevinsb.flower.agent.runtime.AuditEvent;
-import io.github.parkkevinsb.flower.agent.runtime.AuditEventType;
-import io.github.parkkevinsb.flower.agent.runtime.AuditSink;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionRiskLevel;
+import io.github.parkkevinsb.flower.agent.runtime.audit.AuditEvent;
+import io.github.parkkevinsb.flower.agent.runtime.audit.AuditEventType;
+import io.github.parkkevinsb.flower.agent.runtime.audit.AuditSink;
 import io.github.parkkevinsb.flower.agent.runtime.ExecutionContext;
-import io.github.parkkevinsb.flower.agent.runtime.InMemoryActionRegistry;
+import io.github.parkkevinsb.flower.agent.runtime.action.InMemoryActionRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

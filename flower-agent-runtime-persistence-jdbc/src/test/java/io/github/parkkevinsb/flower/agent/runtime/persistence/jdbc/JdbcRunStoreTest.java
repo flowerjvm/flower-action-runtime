@@ -1,24 +1,26 @@
 package io.github.parkkevinsb.flower.agent.runtime.persistence.jdbc;
 
-import io.github.parkkevinsb.flower.agent.runtime.ActionDefinition;
-import io.github.parkkevinsb.flower.agent.runtime.ActionEffect;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutionContext;
+import io.github.parkkevinsb.flower.agent.runtime.run.RunStore;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionDefinition;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionEffect;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionResult;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionStatus;
-import io.github.parkkevinsb.flower.agent.runtime.ActionExecutor;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutor;
 import io.github.parkkevinsb.flower.agent.runtime.ActionOrigin;
 import io.github.parkkevinsb.flower.agent.runtime.ActionProposal;
-import io.github.parkkevinsb.flower.agent.runtime.ActionRegistry;
-import io.github.parkkevinsb.flower.agent.runtime.ActionRiskLevel;
-import io.github.parkkevinsb.flower.agent.runtime.ActionRun;
-import io.github.parkkevinsb.flower.agent.runtime.ActionRunStatus;
-import io.github.parkkevinsb.flower.agent.runtime.ApprovalDecision;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionRegistry;
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionRiskLevel;
+import io.github.parkkevinsb.flower.agent.runtime.run.ActionRun;
+import io.github.parkkevinsb.flower.agent.runtime.run.ActionRunStatus;
+import io.github.parkkevinsb.flower.agent.runtime.approval.ApprovalDecision;
 import io.github.parkkevinsb.flower.agent.runtime.DefaultActionRuntime;
-import io.github.parkkevinsb.flower.agent.runtime.DefaultPolicyGate;
+import io.github.parkkevinsb.flower.agent.runtime.policy.DefaultPolicyGate;
 import io.github.parkkevinsb.flower.agent.runtime.ExecutionContext;
-import io.github.parkkevinsb.flower.agent.runtime.InMemoryActionRegistry;
-import io.github.parkkevinsb.flower.agent.runtime.InMemoryDuplicateActionPolicy;
-import io.github.parkkevinsb.flower.agent.runtime.InMemoryRunStore;
-import io.github.parkkevinsb.flower.agent.runtime.PolicyDecisionType;
+import io.github.parkkevinsb.flower.agent.runtime.action.InMemoryActionRegistry;
+import io.github.parkkevinsb.flower.agent.runtime.duplicate.InMemoryDuplicateActionPolicy;
+import io.github.parkkevinsb.flower.agent.runtime.run.InMemoryRunStore;
+import io.github.parkkevinsb.flower.agent.runtime.policy.PolicyDecisionType;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 
@@ -305,7 +307,7 @@ class JdbcRunStoreTest {
                 .updatedAt(Instant.parse("2026-01-01T00:00:05Z"));
     }
 
-    private static DefaultActionRuntime runtime(ActionRegistry registry, io.github.parkkevinsb.flower.agent.runtime.RunStore runStore) {
+    private static DefaultActionRuntime runtime(ActionRegistry registry, io.github.parkkevinsb.flower.agent.runtime.run.RunStore runStore) {
         return new DefaultActionRuntime(
                 registry,
                 null,
@@ -352,7 +354,7 @@ class JdbcRunStoreTest {
 
     private record StubExecutor(ActionDefinition definition, ActionExecutionResult result) implements ActionExecutor {
         @Override
-        public ActionExecutionResult execute(io.github.parkkevinsb.flower.agent.runtime.ActionExecutionContext context) {
+        public ActionExecutionResult execute(io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutionContext context) {
             return result;
         }
     }
@@ -373,7 +375,7 @@ class JdbcRunStoreTest {
         }
 
         @Override
-        public ActionExecutionResult execute(io.github.parkkevinsb.flower.agent.runtime.ActionExecutionContext context) {
+        public ActionExecutionResult execute(io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutionContext context) {
             calls.incrementAndGet();
             return result;
         }

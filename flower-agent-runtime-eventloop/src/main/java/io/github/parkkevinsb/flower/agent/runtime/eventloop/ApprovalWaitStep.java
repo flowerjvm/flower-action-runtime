@@ -1,6 +1,6 @@
 package io.github.parkkevinsb.flower.agent.runtime.eventloop;
 
-import io.github.parkkevinsb.flower.agent.runtime.ApprovalDecision;
+import io.github.parkkevinsb.flower.agent.runtime.approval.ApprovalDecision;
 import io.github.parkkevinsb.flower.agent.runtime.DefaultActionRuntime;
 import io.github.parkkevinsb.flower.eventloop.event.EventSignal;
 import io.github.parkkevinsb.flower.eventloop.step.AwaitCondition;

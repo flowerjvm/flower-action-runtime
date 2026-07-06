@@ -1,5 +1,19 @@
 package io.github.parkkevinsb.flower.agent.runtime;
 
+import io.github.parkkevinsb.flower.agent.runtime.action.ActionRegistry;
+import io.github.parkkevinsb.flower.agent.runtime.approval.ApprovalDecision;
+import io.github.parkkevinsb.flower.agent.runtime.approval.ApprovalGate;
+import io.github.parkkevinsb.flower.agent.runtime.audit.AuditSink;
+import io.github.parkkevinsb.flower.agent.runtime.audit.TraceSink;
+import io.github.parkkevinsb.flower.agent.runtime.duplicate.DuplicateActionPolicy;
+import io.github.parkkevinsb.flower.agent.runtime.pipeline.ActionExecutionSession;
+import io.github.parkkevinsb.flower.agent.runtime.pipeline.ActionPipeline;
+import io.github.parkkevinsb.flower.agent.runtime.policy.DefaultPolicyGate;
+import io.github.parkkevinsb.flower.agent.runtime.policy.PolicyGate;
+import io.github.parkkevinsb.flower.agent.runtime.run.ActionRun;
+import io.github.parkkevinsb.flower.agent.runtime.run.ActionRunStatus;
+import io.github.parkkevinsb.flower.agent.runtime.run.RunStore;
+import io.github.parkkevinsb.flower.agent.runtime.validation.ActionInputValidator;
 import java.util.Map;
 import java.util.Objects;
 
@@ -108,18 +122,7 @@ public final class DefaultActionRuntime implements ResumableActionRuntime {
                 auditSink,
                 traceSink,
                 runStore);
-        session.policyDecision(new PolicyDecision(
-                run.policyDecisionType() == null ? PolicyDecisionType.ALLOW : run.policyDecisionType(),
-                run.policyReason(),
-                Map.of()));
-
-        if (decision.type() == ApprovalDecisionType.APPROVED) {
-            return ActionPipeline.resumeApproved(session);
-        }
-        if (decision.type() == ApprovalDecisionType.EXPIRED) {
-            return ActionPipeline.expire(session);
-        }
-        return ActionPipeline.reject(session, decision.reason());
+        return ActionPipeline.resume(session, decision);
     }
 
     private static ActionProposal proposalFromRun(ActionRun run) {

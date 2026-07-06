@@ -1,8 +1,8 @@
 package io.github.parkkevinsb.flower.agent.runtime.workflow;
 
-import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionSession;
-import io.github.parkkevinsb.flower.agent.runtime.ActionPipeline;
-import io.github.parkkevinsb.flower.agent.runtime.ActionStage;
+import io.github.parkkevinsb.flower.agent.runtime.pipeline.ActionExecutionSession;
+import io.github.parkkevinsb.flower.agent.runtime.pipeline.ActionPipeline;
+import io.github.parkkevinsb.flower.agent.runtime.pipeline.ActionStage;
 import io.github.parkkevinsb.flower.core.step.Step;
 import io.github.parkkevinsb.flower.core.step.StepContext;
 import io.github.parkkevinsb.flower.core.step.StepResult;
