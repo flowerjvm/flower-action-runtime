@@ -53,9 +53,14 @@ public final class ActionPipeline {
                     break;
                 }
             }
-            finalizeStage().stage().execute(session);
         } catch (RuntimeException exception) {
             return failRuntime(session, exception);
+        }
+
+        try {
+            finalizeStage().stage().execute(session);
+        } catch (RuntimeException exception) {
+            return failFinalize(session, exception);
         }
         return session.result();
     }
@@ -69,11 +74,25 @@ public final class ActionPipeline {
      * validator, policy, duplicate, audit, or Flow step failures.</p>
      */
     public static ActionExecutionResult failRuntime(ActionExecutionSession session, Throwable cause) {
-        ActionExecutionResult result = ActionExecutionResult.failed(failureMessage(cause));
-        session.result(result);
-        bestEffortRuntimeFailureAudit(session, result, cause);
-        bestEffortCompleteReservedDuplicate(session, result, cause);
-        return result;
+        String message = failureMessage(cause);
+        if (!session.hasResult()) {
+            session.result(ActionExecutionResult.failed(message));
+        }
+        bestEffortRuntimeFailureAudit(session, message, cause);
+        bestEffortReleaseReservedDuplicate(session, cause);
+        return session.result();
+    }
+
+    /**
+     * Handles a failure in the final duplicate bookkeeping stage without changing the already-produced action result.
+     */
+    public static ActionExecutionResult failFinalize(ActionExecutionSession session, Throwable cause) {
+        String message = failureMessage(cause);
+        if (!session.hasResult()) {
+            session.result(ActionExecutionResult.failed(message));
+        }
+        bestEffortRuntimeFailureAudit(session, message, cause);
+        return session.result();
     }
 
     static StageOutcome recordProposal(ActionExecutionSession session) {
@@ -161,24 +180,31 @@ public final class ActionPipeline {
             session.record(AuditEventType.DRY_RUN_COMPLETED, dryRun.output());
         }
         session.record(AuditEventType.ACTION_EXECUTION_STARTED, Map.of());
+        session.markActionExecutionStarted();
+        ActionExecutionResult result;
         try {
-            ActionExecutionResult result = session.executor().execute(actionContext);
-            session.result(result);
-            session.record(result.terminalSuccess()
-                    ? AuditEventType.ACTION_EXECUTION_COMPLETED
-                    : AuditEventType.ACTION_EXECUTION_FAILED, result.output());
+            result = session.executor().execute(actionContext);
         } catch (RuntimeException exception) {
-            ActionExecutionResult result = ActionExecutionResult.failed(failureMessage(exception));
+            result = ActionExecutionResult.failed(failureMessage(exception));
             session.result(result);
             session.record(AuditEventType.ACTION_EXECUTION_FAILED, Map.of("message", result.message()));
+            return StageOutcome.CONTINUE;
         }
+        session.result(result);
+        session.record(result.terminalSuccess()
+                ? AuditEventType.ACTION_EXECUTION_COMPLETED
+                : AuditEventType.ACTION_EXECUTION_FAILED, result.output());
         return StageOutcome.CONTINUE;
     }
 
     static StageOutcome finalizeExecution(ActionExecutionSession session) {
         if (session.duplicateDecision() != null
                 && session.duplicateDecision().type() == DuplicateActionDecisionType.ACCEPT) {
-            session.duplicateActionPolicy().complete(session.proposal(), session.result());
+            if (isDuplicateCacheable(session.result())) {
+                session.duplicateActionPolicy().complete(session.proposal(), session.result());
+            } else {
+                session.duplicateActionPolicy().release(session.proposal(), null);
+            }
         }
         return StageOutcome.CONTINUE;
     }
@@ -194,29 +220,30 @@ public final class ActionPipeline {
         return message;
     }
 
-    private static void bestEffortRuntimeFailureAudit(
-            ActionExecutionSession session,
-            ActionExecutionResult result,
-            Throwable cause) {
+    private static boolean isDuplicateCacheable(ActionExecutionResult result) {
+        return result.status() != ActionExecutionStatus.PENDING_APPROVAL;
+    }
+
+    private static void bestEffortRuntimeFailureAudit(ActionExecutionSession session, String message, Throwable cause) {
         try {
-            session.record(AuditEventType.ACTION_RUNTIME_FAILED, Map.of("message", result.message()));
+            session.record(AuditEventType.ACTION_RUNTIME_FAILED, Map.of("message", message));
         } catch (Throwable auditFailure) {
             suppress(cause, auditFailure);
         }
     }
 
-    private static void bestEffortCompleteReservedDuplicate(
-            ActionExecutionSession session,
-            ActionExecutionResult result,
-            Throwable cause) {
+    private static void bestEffortReleaseReservedDuplicate(ActionExecutionSession session, Throwable cause) {
         if (session.duplicateDecision() == null
                 || session.duplicateDecision().type() != DuplicateActionDecisionType.ACCEPT) {
             return;
         }
+        if (session.actionExecutionStarted()) {
+            return;
+        }
         try {
-            session.duplicateActionPolicy().complete(session.proposal(), result);
-        } catch (Throwable duplicateFailure) {
-            suppress(cause, duplicateFailure);
+            session.duplicateActionPolicy().release(session.proposal(), cause);
+        } catch (Throwable releaseFailure) {
+            suppress(cause, releaseFailure);
         }
     }
 

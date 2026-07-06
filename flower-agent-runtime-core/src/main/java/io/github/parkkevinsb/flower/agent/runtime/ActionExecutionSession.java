@@ -27,6 +27,7 @@ public final class ActionExecutionSession {
     private ValidationResult validationResult;
     private PolicyDecision policyDecision;
     private ActionExecutionResult result;
+    private boolean actionExecutionStarted;
 
     public ActionExecutionSession(
             ActionProposal proposal,
@@ -128,6 +129,14 @@ public final class ActionExecutionSession {
 
     public boolean hasResult() {
         return result != null;
+    }
+
+    boolean actionExecutionStarted() {
+        return actionExecutionStarted;
+    }
+
+    void markActionExecutionStarted() {
+        this.actionExecutionStarted = true;
     }
 
     void record(AuditEventType type, Map<String, Object> payload) {

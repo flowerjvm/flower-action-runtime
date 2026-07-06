@@ -27,4 +27,9 @@ public final class InMemoryDuplicateActionPolicy implements DuplicateActionPolic
         running.remove(key);
         completed.put(key, result);
     }
+
+    @Override
+    public void release(ActionProposal proposal, Throwable cause) {
+        running.remove(proposal.idempotencyKey());
+    }
 }

@@ -4,6 +4,7 @@ import io.github.parkkevinsb.flower.agent.runtime.ActionDefinition;
 import io.github.parkkevinsb.flower.agent.runtime.ActionEffect;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionContext;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionResult;
+import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionStatus;
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutor;
 import io.github.parkkevinsb.flower.agent.runtime.ActionInputValidator;
 import io.github.parkkevinsb.flower.agent.runtime.ActionOrigin;
@@ -12,6 +13,7 @@ import io.github.parkkevinsb.flower.agent.runtime.ActionRegistry;
 import io.github.parkkevinsb.flower.agent.runtime.ActionRiskLevel;
 import io.github.parkkevinsb.flower.agent.runtime.ActionRuntime;
 import io.github.parkkevinsb.flower.agent.runtime.AuditEvent;
+import io.github.parkkevinsb.flower.agent.runtime.AuditEventType;
 import io.github.parkkevinsb.flower.agent.runtime.AuditSink;
 import io.github.parkkevinsb.flower.agent.runtime.DefaultActionRuntime;
 import io.github.parkkevinsb.flower.agent.runtime.DuplicateActionDecision;
@@ -149,6 +151,15 @@ class RuntimeParityTest {
     }
 
     @Test
+    void transientValidatorExceptionReleasesDuplicateWithoutCachingFailure() {
+        ActionExecutionResult directResult = runTransientValidatorSequence(false);
+        ActionExecutionResult flowResult = runTransientValidatorSequence(true);
+
+        assertThat(flowResult.status()).isEqualTo(directResult.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(flowResult.output()).isEqualTo(directResult.output()).containsEntry("reportId", 99);
+    }
+
+    @Test
     void policyExceptionParity() {
         PolicyGate throwingPolicy = (proposal, definition, context) -> {
             throw new RuntimeException("policy boom");
@@ -199,6 +210,97 @@ class RuntimeParityTest {
         assertThat(flowResult.status()).isEqualTo(directResult.status());
         assertThat(flowResult.message()).isEqualTo(directResult.message());
         assertThat(flowAudit.calls()).isEqualTo(directAudit.calls());
+    }
+
+    @Test
+    void completionAuditFailurePreservesSuccessfulResultAndDoesNotReleaseDuplicate() {
+        TrackingDuplicateActionPolicy directDuplicate = new TrackingDuplicateActionPolicy();
+        CompletionAuditThrowsSink directAudit = new CompletionAuditThrowsSink();
+        ActionRuntime direct = new DefaultActionRuntime(
+                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                        ActionExecutionResult.succeeded(Map.of("reportId", 10))),
+                null, PolicyGate.allowAll(), null, directDuplicate, directAudit, null);
+
+        TrackingDuplicateActionPolicy flowDuplicate = new TrackingDuplicateActionPolicy();
+        CompletionAuditThrowsSink flowAudit = new CompletionAuditThrowsSink();
+        ActionRuntime flow = new FlowActionRuntime(
+                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                        ActionExecutionResult.succeeded(Map.of("reportId", 10))),
+                null, PolicyGate.allowAll(), null, flowDuplicate, flowAudit, null, null, null, 64);
+
+        ActionProposal proposal = new ActionProposal("proposal-1", "CreateReport", ActionOrigin.USER,
+                "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
+        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+
+        ActionExecutionResult directResult = direct.handle(proposal, context);
+        ActionExecutionResult flowResult = flow.handle(proposal, context);
+
+        assertThat(flowResult.status()).isEqualTo(directResult.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(flowResult.output()).isEqualTo(directResult.output()).containsEntry("reportId", 10);
+        assertThat(directDuplicate.completeCalls()).isZero();
+        assertThat(flowDuplicate.completeCalls()).isZero();
+        assertThat(directDuplicate.releaseCalls()).isZero();
+        assertThat(flowDuplicate.releaseCalls()).isZero();
+        assertThat(project(flowAudit.events())).isEqualTo(project(directAudit.events()));
+    }
+
+    @Test
+    void completeFailurePreservesSuccessfulResultParity() {
+        CompleteThrowsDuplicateActionPolicy directDuplicate = new CompleteThrowsDuplicateActionPolicy();
+        RecordingAuditSink directAudit = new RecordingAuditSink();
+        ActionRuntime direct = new DefaultActionRuntime(
+                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                        ActionExecutionResult.succeeded(Map.of("reportId", 10))),
+                null, PolicyGate.allowAll(), null, directDuplicate, directAudit, null);
+
+        CompleteThrowsDuplicateActionPolicy flowDuplicate = new CompleteThrowsDuplicateActionPolicy();
+        RecordingAuditSink flowAudit = new RecordingAuditSink();
+        ActionRuntime flow = new FlowActionRuntime(
+                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                        ActionExecutionResult.succeeded(Map.of("reportId", 10))),
+                null, PolicyGate.allowAll(), null, flowDuplicate, flowAudit, null, null, null, 64);
+
+        ActionProposal proposal = new ActionProposal("proposal-1", "CreateReport", ActionOrigin.USER,
+                "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
+        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+
+        ActionExecutionResult directResult = direct.handle(proposal, context);
+        ActionExecutionResult flowResult = flow.handle(proposal, context);
+
+        assertThat(flowResult.status()).isEqualTo(directResult.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(flowResult.output()).isEqualTo(directResult.output()).containsEntry("reportId", 10);
+        assertThat(flowResult.message()).isEqualTo(directResult.message());
+        assertThat(project(flowAudit.events())).isEqualTo(project(directAudit.events()));
+        assertThat(directDuplicate.completeCalls()).isEqualTo(1);
+        assertThat(flowDuplicate.completeCalls()).isEqualTo(1);
+        assertThat(directDuplicate.releaseCalls()).isZero();
+        assertThat(flowDuplicate.releaseCalls()).isZero();
+    }
+
+    @Test
+    void pendingApprovalReleasesDuplicateReservationInsteadOfCachingResult() {
+        TrackingDuplicateActionPolicy directDuplicate = new TrackingDuplicateActionPolicy();
+        ActionRuntime direct = new DefaultActionRuntime(
+                registryOf(writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                        ActionExecutionResult.succeeded(Map.of())),
+                null, null, null, directDuplicate, null, null);
+
+        TrackingDuplicateActionPolicy flowDuplicate = new TrackingDuplicateActionPolicy();
+        ActionRuntime flow = new FlowActionRuntime(
+                registryOf(writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                        ActionExecutionResult.succeeded(Map.of())),
+                null, null, null, flowDuplicate, null, null, null, null, 64);
+
+        ActionProposal proposal = new ActionProposal("proposal-1", "UpdateReport", ActionOrigin.AI_PLANNER,
+                "planner", "update", 0.9d, Map.of(), "same-key", Map.of());
+        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+
+        assertThat(direct.handle(proposal, context).status()).isEqualTo(ActionExecutionStatus.PENDING_APPROVAL);
+        assertThat(flow.handle(proposal, context).status()).isEqualTo(ActionExecutionStatus.PENDING_APPROVAL);
+        assertThat(directDuplicate.completeCalls()).isZero();
+        assertThat(flowDuplicate.completeCalls()).isZero();
+        assertThat(directDuplicate.releaseCalls()).isEqualTo(1);
+        assertThat(flowDuplicate.releaseCalls()).isEqualTo(1);
     }
 
     @Test
@@ -264,6 +366,27 @@ class RuntimeParityTest {
         return supplier == null ? null : supplier.get();
     }
 
+    private static ActionExecutionResult runTransientValidatorSequence(boolean flowRuntime) {
+        FailsOnceValidator validator = new FailsOnceValidator();
+        ActionRegistry registry = registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                ActionExecutionResult.succeeded(Map.of("reportId", 99)));
+        DuplicateActionPolicy duplicatePolicy = new InMemoryDuplicateActionPolicy();
+        ActionRuntime runtime = flowRuntime
+                ? new FlowActionRuntime(registry, validator, PolicyGate.allowAll(), null,
+                        duplicatePolicy, null, null, null, null, 64)
+                : new DefaultActionRuntime(registry, validator, PolicyGate.allowAll(), null,
+                        duplicatePolicy, null, null);
+        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+        ActionProposal first = new ActionProposal("proposal-1", "CreateReport", ActionOrigin.USER,
+                "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
+        ActionProposal second = new ActionProposal("proposal-2", "CreateReport", ActionOrigin.USER,
+                "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
+
+        ActionExecutionResult firstResult = runtime.handle(first, context);
+        assertThat(firstResult.status()).isEqualTo(ActionExecutionStatus.FAILED);
+        return runtime.handle(second, context);
+    }
+
     private static List<Map<String, Object>> project(List<AuditEvent> events) {
         List<Map<String, Object>> projected = new ArrayList<>();
         for (AuditEvent event : events) {
@@ -309,6 +432,22 @@ class RuntimeParityTest {
         }
     }
 
+    private static final class FailsOnceValidator implements ActionInputValidator {
+        private int calls;
+
+        @Override
+        public ValidationResult validate(
+                ActionProposal proposal,
+                ActionDefinition definition,
+                ExecutionContext context) {
+            calls++;
+            if (calls == 1) {
+                throw new RuntimeException("validator boom");
+            }
+            return ValidationResult.ok();
+        }
+    }
+
     private static final class ThrowingDuplicateActionPolicy implements DuplicateActionPolicy {
         @Override
         public DuplicateActionDecision reserve(ActionProposal proposal, ExecutionContext context) {
@@ -318,6 +457,47 @@ class RuntimeParityTest {
         @Override
         public void complete(ActionProposal proposal, ActionExecutionResult result) {
             throw new RuntimeException("duplicate complete boom");
+        }
+
+        @Override
+        public void release(ActionProposal proposal, Throwable cause) {
+            throw new RuntimeException("duplicate release boom");
+        }
+    }
+
+    private static class TrackingDuplicateActionPolicy implements DuplicateActionPolicy {
+        private int completeCalls;
+        private int releaseCalls;
+
+        @Override
+        public DuplicateActionDecision reserve(ActionProposal proposal, ExecutionContext context) {
+            return DuplicateActionDecision.accept();
+        }
+
+        @Override
+        public void complete(ActionProposal proposal, ActionExecutionResult result) {
+            completeCalls++;
+        }
+
+        @Override
+        public void release(ActionProposal proposal, Throwable cause) {
+            releaseCalls++;
+        }
+
+        int completeCalls() {
+            return completeCalls;
+        }
+
+        int releaseCalls() {
+            return releaseCalls;
+        }
+    }
+
+    private static final class CompleteThrowsDuplicateActionPolicy extends TrackingDuplicateActionPolicy {
+        @Override
+        public void complete(ActionProposal proposal, ActionExecutionResult result) {
+            super.complete(proposal, result);
+            throw new RuntimeException("complete boom");
         }
     }
 
@@ -345,6 +525,22 @@ class RuntimeParityTest {
 
         int calls() {
             return calls;
+        }
+    }
+
+    private static final class CompletionAuditThrowsSink implements AuditSink {
+        private final List<AuditEvent> events = new ArrayList<>();
+
+        @Override
+        public void record(AuditEvent event) {
+            if (event.type() == AuditEventType.ACTION_EXECUTION_COMPLETED) {
+                throw new RuntimeException("completion audit boom");
+            }
+            events.add(event);
+        }
+
+        List<AuditEvent> events() {
+            return events;
         }
     }
 }

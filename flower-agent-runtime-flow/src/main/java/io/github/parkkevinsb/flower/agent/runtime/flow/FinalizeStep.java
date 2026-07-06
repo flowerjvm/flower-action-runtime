@@ -1,6 +1,7 @@
 package io.github.parkkevinsb.flower.agent.runtime.flow;
 
 import io.github.parkkevinsb.flower.agent.runtime.ActionExecutionSession;
+import io.github.parkkevinsb.flower.agent.runtime.ActionPipeline;
 import io.github.parkkevinsb.flower.agent.runtime.ActionStage;
 import io.github.parkkevinsb.flower.core.step.Step;
 import io.github.parkkevinsb.flower.core.step.StepContext;
@@ -23,7 +24,11 @@ final class FinalizeStep extends Step {
 
     @Override
     protected StepResult onTick(StepContext ctx) {
-        stage.execute(session);
+        try {
+            stage.execute(session);
+        } catch (RuntimeException exception) {
+            ActionPipeline.failFinalize(session, exception);
+        }
         return StepResult.finish();
     }
 }

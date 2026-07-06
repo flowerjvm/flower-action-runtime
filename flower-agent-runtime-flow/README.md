@@ -34,5 +34,10 @@ That future version should use Flower durable steps and Flow persistence, and
 must define idempotency/checkpoint boundaries so side-effecting action
 execution is not replayed accidentally after restart.
 
+Fatal JVM-level `Error`s are rethrown instead of converted to action results.
+If a host application uses a persistent duplicate policy, it should reconcile
+stale reservations on startup because fatal failures may bypass normal release
+bookkeeping.
+
 This module does not define the public action model. The public contracts live
 in `flower-agent-runtime-core`.
