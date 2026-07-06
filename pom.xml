@@ -18,6 +18,7 @@
         <module>flower-agent-runtime-workflow</module>
         <module>flower-agent-runtime-persistence-jdbc</module>
         <module>flower-agent-runtime-eventloop</module>
+        <module>flower-agent-runtime-integration-test</module>
     </modules>
 
     <properties>
