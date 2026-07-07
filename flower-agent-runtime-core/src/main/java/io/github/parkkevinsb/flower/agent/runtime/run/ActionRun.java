@@ -19,6 +19,9 @@ public record ActionRun(
         String proposalId,
         String requesterId,
         ActionOrigin origin,
+        String proposalReason,
+        double proposalConfidence,
+        Map<String, Object> proposalMetadata,
         Map<String, Object> input,
         String duplicateKey,
         ActionRunStatus status,
@@ -42,6 +45,8 @@ public record ActionRun(
         proposalId = normalize(proposalId);
         requesterId = normalize(requesterId);
         origin = Objects.requireNonNullElse(origin, ActionOrigin.UNKNOWN);
+        proposalReason = normalize(proposalReason);
+        proposalMetadata = proposalMetadata == null ? Map.of() : Map.copyOf(proposalMetadata);
         input = input == null ? Map.of() : Map.copyOf(input);
         duplicateKey = normalize(duplicateKey);
         status = Objects.requireNonNullElse(status, ActionRunStatus.REQUESTED);
@@ -68,6 +73,9 @@ public record ActionRun(
                 .proposalId(proposal.proposalId())
                 .requesterId(proposal.requesterId())
                 .origin(proposal.origin())
+                .proposalReason(proposal.reason())
+                .proposalConfidence(proposal.confidence())
+                .proposalMetadata(proposal.metadata())
                 .input(proposal.input())
                 .duplicateKey(proposal.idempotencyKey())
                 .status(ActionRunStatus.REQUESTED)
@@ -91,6 +99,9 @@ public record ActionRun(
                 .proposalId(proposalId)
                 .requesterId(requesterId)
                 .origin(origin)
+                .proposalReason(proposalReason)
+                .proposalConfidence(proposalConfidence)
+                .proposalMetadata(proposalMetadata)
                 .input(input)
                 .duplicateKey(duplicateKey)
                 .status(status)
@@ -119,6 +130,9 @@ public record ActionRun(
         private String proposalId;
         private String requesterId;
         private ActionOrigin origin;
+        private String proposalReason;
+        private double proposalConfidence;
+        private Map<String, Object> proposalMetadata;
         private Map<String, Object> input;
         private String duplicateKey;
         private ActionRunStatus status;
@@ -173,6 +187,21 @@ public record ActionRun(
 
         public Builder origin(ActionOrigin origin) {
             this.origin = origin;
+            return this;
+        }
+
+        public Builder proposalReason(String proposalReason) {
+            this.proposalReason = proposalReason;
+            return this;
+        }
+
+        public Builder proposalConfidence(double proposalConfidence) {
+            this.proposalConfidence = proposalConfidence;
+            return this;
+        }
+
+        public Builder proposalMetadata(Map<String, Object> proposalMetadata) {
+            this.proposalMetadata = proposalMetadata;
             return this;
         }
 
@@ -251,6 +280,9 @@ public record ActionRun(
                     proposalId,
                     requesterId,
                     origin,
+                    proposalReason,
+                    proposalConfidence,
+                    proposalMetadata,
                     input,
                     duplicateKey,
                     status,

@@ -292,6 +292,9 @@ class JdbcRunStoreTest {
                 .proposalId(runId + "-proposal")
                 .requesterId("requester-1")
                 .origin(ActionOrigin.USER)
+                .proposalReason("planner rationale")
+                .proposalConfidence(0.9d)
+                .proposalMetadata(Map.of("model", "x"))
                 .input(Map.of("siteId", 1, "title", "Inspection", "nested", Map.of("ok", true)))
                 .duplicateKey(runId + "-dedupe")
                 .status(ActionRunStatus.RUNNING)
@@ -340,6 +343,9 @@ class JdbcRunStoreTest {
         assertThat(actual.proposalId()).isEqualTo(expected.proposalId());
         assertThat(actual.requesterId()).isEqualTo(expected.requesterId());
         assertThat(actual.origin()).isEqualTo(expected.origin());
+        assertThat(actual.proposalReason()).isEqualTo(expected.proposalReason());
+        assertThat(actual.proposalConfidence()).isEqualTo(expected.proposalConfidence());
+        assertThat(actual.proposalMetadata()).isEqualTo(expected.proposalMetadata());
         assertThat(actual.input()).isEqualTo(expected.input());
         assertThat(actual.duplicateKey()).isEqualTo(expected.duplicateKey());
         assertThat(actual.status()).isEqualTo(expected.status());

@@ -7,6 +7,7 @@ import io.github.parkkevinsb.flower.agent.runtime.action.ActionExecutor;
 import io.github.parkkevinsb.flower.agent.runtime.action.ActionRegistry;
 import io.github.parkkevinsb.flower.agent.runtime.action.ActionRiskLevel;
 import io.github.parkkevinsb.flower.agent.runtime.action.InMemoryActionRegistry;
+import io.github.parkkevinsb.flower.agent.runtime.approval.ApprovalDecision;
 import io.github.parkkevinsb.flower.agent.runtime.duplicate.InMemoryDuplicateActionPolicy;
 import io.github.parkkevinsb.flower.agent.runtime.policy.PolicyDecisionType;
 import io.github.parkkevinsb.flower.agent.runtime.policy.PolicyGate;
@@ -138,6 +139,49 @@ class ActionRunLifecycleTest {
     }
 
     @Test
+    void capturesProposalRationaleAndRestoresItOnResume() {
+        InMemoryRunStore runStore = new InMemoryRunStore();
+        ProposalCapturingExecutor executor = new ProposalCapturingExecutor(
+                writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                ActionExecutionResult.succeeded(Map.of("updated", true)));
+        DefaultActionRuntime runtime = runtime(
+                new InMemoryActionRegistry(List.of(executor)),
+                null,
+                null,
+                runStore);
+        ExecutionContext context = context("run-proposal-rationale");
+        ActionProposal proposal = new ActionProposal(
+                "proposal-rationale",
+                "UpdateReport",
+                ActionOrigin.AI_PLANNER,
+                "planner",
+                "source-backed document issue",
+                0.72d,
+                Map.of("siteId", 1),
+                null,
+                Map.of("model", "x"));
+
+        ActionExecutionResult parked = runtime.handle(proposal, context);
+        ActionRun waiting = stored(runStore, context);
+
+        assertThat(parked.status()).isEqualTo(ActionExecutionStatus.PENDING_APPROVAL);
+        assertThat(waiting.proposalReason()).isEqualTo(proposal.reason());
+        assertThat(waiting.proposalConfidence()).isEqualTo(proposal.confidence());
+        assertThat(waiting.proposalMetadata()).isEqualTo(proposal.metadata());
+
+        ActionExecutionResult resumed = runtime.resume(
+                context.runId(),
+                ApprovalDecision.approved(waiting.approvalId(), "admin"));
+
+        ActionRun completed = stored(runStore, context);
+        assertThat(resumed.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(completed.status()).isEqualTo(ActionRunStatus.SUCCEEDED);
+        assertThat(executor.proposal().reason()).isEqualTo(proposal.reason());
+        assertThat(executor.proposal().confidence()).isEqualTo(proposal.confidence());
+        assertThat(executor.proposal().metadata()).isEqualTo(proposal.metadata());
+    }
+
+    @Test
     void storesExecutorExceptionAsFailedRun() {
         InMemoryRunStore runStore = new InMemoryRunStore();
         DefaultActionRuntime runtime = runtime(
@@ -229,6 +273,32 @@ class ActionRunLifecycleTest {
         @Override
         public ActionExecutionResult execute(ActionExecutionContext context) {
             throw new RuntimeException(message);
+        }
+    }
+
+    private static final class ProposalCapturingExecutor implements ActionExecutor {
+        private final ActionDefinition definition;
+        private final ActionExecutionResult result;
+        private ActionProposal proposal;
+
+        private ProposalCapturingExecutor(ActionDefinition definition, ActionExecutionResult result) {
+            this.definition = definition;
+            this.result = result;
+        }
+
+        @Override
+        public ActionDefinition definition() {
+            return definition;
+        }
+
+        @Override
+        public ActionExecutionResult execute(ActionExecutionContext context) {
+            proposal = context.proposal();
+            return result;
+        }
+
+        private ActionProposal proposal() {
+            return proposal;
         }
     }
 }

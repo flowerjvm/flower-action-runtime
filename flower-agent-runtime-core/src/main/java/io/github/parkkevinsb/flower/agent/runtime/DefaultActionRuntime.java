@@ -131,11 +131,11 @@ public final class DefaultActionRuntime implements ResumableActionRuntime {
                 run.actionId(),
                 run.origin(),
                 run.requesterId(),
-                "",
-                1.0d,
+                run.proposalReason(),
+                run.proposalConfidence(),
                 run.input(),
                 run.duplicateKey(),
-                Map.of());
+                run.proposalMetadata());
     }
 
     private static ExecutionContext contextFromRun(ActionRun run) {

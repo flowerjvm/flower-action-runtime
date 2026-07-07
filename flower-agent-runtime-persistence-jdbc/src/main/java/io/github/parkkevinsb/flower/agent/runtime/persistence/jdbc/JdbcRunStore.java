@@ -37,6 +37,9 @@ public final class JdbcRunStore implements RunStore {
             "proposal_id",
             "requester_id",
             "origin",
+            "proposal_reason",
+            "proposal_confidence",
+            "proposal_metadata_json",
             "input_json",
             "duplicate_key",
             "status",
@@ -53,7 +56,7 @@ public final class JdbcRunStore implements RunStore {
             "created_at",
             "updated_at");
     private static final String INSERT_SQL = "INSERT INTO action_run (" + COLUMNS + ") VALUES ("
-            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     private static final String UPDATE_SQL = """
             UPDATE action_run
             SET tenant_id = ?,
@@ -63,6 +66,9 @@ public final class JdbcRunStore implements RunStore {
                 proposal_id = ?,
                 requester_id = ?,
                 origin = ?,
+                proposal_reason = ?,
+                proposal_confidence = ?,
+                proposal_metadata_json = ?,
                 input_json = ?,
                 duplicate_key = ?,
                 status = ?,
@@ -195,7 +201,7 @@ public final class JdbcRunStore implements RunStore {
         int index = 1;
         statement.setString(index++, run.runId());
         index = bindMutableColumns(statement, index, run);
-        if (index != 24) {
+        if (index != 27) {
             throw new IllegalStateException("Unexpected insert bind count: " + index);
         }
     }
@@ -203,7 +209,7 @@ public final class JdbcRunStore implements RunStore {
     private void bindUpdate(PreparedStatement statement, ActionRun run) throws SQLException {
         int index = bindMutableColumns(statement, 1, run);
         statement.setString(index++, run.runId());
-        if (index != 24) {
+        if (index != 27) {
             throw new IllegalStateException("Unexpected update bind count: " + index);
         }
     }
@@ -216,6 +222,9 @@ public final class JdbcRunStore implements RunStore {
         statement.setString(index++, run.proposalId());
         statement.setString(index++, run.requesterId());
         statement.setString(index++, run.origin().name());
+        statement.setString(index++, run.proposalReason());
+        statement.setDouble(index++, run.proposalConfidence());
+        statement.setString(index++, writeJson(run.proposalMetadata()));
         statement.setString(index++, writeJson(run.input()));
         statement.setString(index++, run.duplicateKey());
         statement.setString(index++, run.status().name());
@@ -245,6 +254,9 @@ public final class JdbcRunStore implements RunStore {
                 .proposalId(resultSet.getString("proposal_id"))
                 .requesterId(resultSet.getString("requester_id"))
                 .origin(ActionOrigin.valueOf(resultSet.getString("origin")))
+                .proposalReason(resultSet.getString("proposal_reason"))
+                .proposalConfidence(resultSet.getDouble("proposal_confidence"))
+                .proposalMetadata(readMap(resultSet.getString("proposal_metadata_json")))
                 .input(readMap(resultSet.getString("input_json")))
                 .duplicateKey(resultSet.getString("duplicate_key"))
                 .status(ActionRunStatus.valueOf(resultSet.getString("status")))
