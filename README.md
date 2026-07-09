@@ -245,6 +245,8 @@ The default `PolicyGate` already encodes the conservative baseline:
 - an origin the definition does not allow is **denied**
 - an AI-planner proposal for anything other than a read-only action
   **requires approval**
+- a `CRITICAL` risk action **requires approval**, whatever its origin
+- a `HIGH` risk action that is not read-only **requires approval**
 - an action marked `approvalRequiredByDefault` **requires approval**
 - everything else is allowed
 
