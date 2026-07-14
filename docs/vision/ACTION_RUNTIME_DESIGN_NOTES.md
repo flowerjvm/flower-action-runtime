@@ -939,7 +939,7 @@ Example project integration:
 
 ```kotlin
 plugins {
-    id("io.github.parkkevinsb.flower.check")
+    id("io.github.flowerjvm.flower.check")
 }
 ```
 

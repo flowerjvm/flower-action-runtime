@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.github.parkkevinsb.flower.action.runtime</groupId>
+        <groupId>io.github.flowerjvm</groupId>
         <artifactId>flower-action-runtime-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -17,11 +17,11 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.github.parkkevinsb.flower.action.runtime</groupId>
+            <groupId>io.github.flowerjvm</groupId>
             <artifactId>flower-action-runtime-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.github.parkkevinsb.flower</groupId>
+            <groupId>io.github.flowerjvm</groupId>
             <artifactId>flower-core</artifactId>
         </dependency>
         <dependency>

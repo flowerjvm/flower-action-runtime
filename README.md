@@ -10,7 +10,7 @@ leaves the same audit trail.
 
 The unit of control is the action, not the agent.
 
-Project status: `0.1.0-SNAPSHOT`. The core runtime is usable for early
+Project status: `0.1.0`. The core runtime is usable for early
 experiments and host-application validation. APIs may still change before a
 1.0 release. Artifacts are not published to Maven Central yet.
 
@@ -169,13 +169,13 @@ Declare an action once. The definition is what policy reasons about; the
 executor is the only path to the side effect.
 
 ```java
-import io.github.parkkevinsb.flower.action.runtime.ActionExecutionResult;
-import io.github.parkkevinsb.flower.action.runtime.ActionOrigin;
-import io.github.parkkevinsb.flower.action.runtime.action.ActionDefinition;
-import io.github.parkkevinsb.flower.action.runtime.action.ActionEffect;
-import io.github.parkkevinsb.flower.action.runtime.action.ActionExecutionContext;
-import io.github.parkkevinsb.flower.action.runtime.action.ActionExecutor;
-import io.github.parkkevinsb.flower.action.runtime.action.ActionRiskLevel;
+import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
+import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
+import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
+import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
+import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
+import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import java.util.Map;
 import java.util.Set;
 
@@ -217,10 +217,10 @@ final class CreateReportAction implements ActionExecutor {
 Then run proposals through the runtime:
 
 ```java
-import io.github.parkkevinsb.flower.action.runtime.ActionProposal;
-import io.github.parkkevinsb.flower.action.runtime.DefaultActionRuntime;
-import io.github.parkkevinsb.flower.action.runtime.ExecutionContext;
-import io.github.parkkevinsb.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.DefaultActionRuntime;
+import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
+import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
 import java.util.List;
 import java.util.Map;
 
@@ -256,8 +256,8 @@ The default `PolicyGate` already encodes the conservative baseline:
 runtime a `RunStore` and the run can wait for a human:
 
 ```java
-import io.github.parkkevinsb.flower.action.runtime.approval.ApprovalDecision;
-import io.github.parkkevinsb.flower.action.runtime.run.InMemoryRunStore;
+import io.github.flowerjvm.flower.action.runtime.approval.ApprovalDecision;
+import io.github.flowerjvm.flower.action.runtime.run.InMemoryRunStore;
 
 var runtime = new DefaultActionRuntime(
         registry, null, null, null, null, null, null,   // defaults
