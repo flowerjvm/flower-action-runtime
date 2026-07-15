@@ -1,5 +1,8 @@
 # flower-action-runtime
 
+[![CI](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.flowerjvm/flower-action-runtime-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.flowerjvm/flower-action-runtime-core/0.1.0)
+
 Controlled action runtime for AI-assisted business systems.
 
 `flower-action-runtime` is the control boundary between "someone wants this
@@ -12,7 +15,42 @@ The unit of control is the action, not the agent.
 
 Project status: `0.1.0`. The core runtime is usable for early
 experiments and host-application validation. APIs may still change before a
-1.0 release. Artifacts are not published to Maven Central yet.
+1.0 release. Public artifacts are available from Maven Central.
+
+## Install From Maven Central
+
+All public modules use the `io.github.flowerjvm` group and version `0.1.0`.
+No custom repository, neighboring source checkout, or `mavenLocal()` is
+required.
+
+For the direct, synchronous runtime, add `flower-action-runtime-core`:
+
+Gradle Kotlin DSL:
+
+```kotlin
+dependencies {
+    implementation("io.github.flowerjvm:flower-action-runtime-core:0.1.0")
+}
+```
+
+Maven:
+
+```xml
+<dependency>
+    <groupId>io.github.flowerjvm</groupId>
+    <artifactId>flower-action-runtime-core</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+Choose additional modules only when the corresponding backend is needed:
+
+| Use case | Artifact |
+| --- | --- |
+| Direct controlled-action pipeline | `io.github.flowerjvm:flower-action-runtime-core:0.1.0` |
+| Flower Flow / Step backend | `io.github.flowerjvm:flower-action-runtime-workflow:0.1.0` |
+| JDBC `ActionRun` persistence | `io.github.flowerjvm:flower-action-runtime-persistence-jdbc:0.1.0` |
+| Event-loop approval and resume backend | `io.github.flowerjvm:flower-action-runtime-eventloop:0.1.0` |
 
 ## The Side Effects Are Already There
 
@@ -362,6 +400,9 @@ behavior.
 
 ## Modules
 
+Every module below except the integration-test module is published to Maven
+Central at version `0.1.0`.
+
 | Module | Status | Purpose |
 | --- | --- | --- |
 | `flower-action-runtime-core` | Early usable | Engine-neutral pipeline, registry, policy, approval, duplicate handling, audit, and run store contracts. |
@@ -382,7 +423,6 @@ What the current implementation gets right:
 
 What it does not do yet:
 
-- Maven Central publishing is not set up
 - multi-node compare-and-set run claiming is not implemented
 - annotation-based Spring convenience is planned, not implemented
 - external policy engines (OPA, Cerbos) are an intentional `PolicyGate`
