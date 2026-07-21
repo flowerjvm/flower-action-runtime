@@ -20,7 +20,9 @@ public record ActionProposal(
         double confidence,
         Map<String, Object> input,
         String idempotencyKey,
-        Map<String, Object> metadata) {
+        Map<String, Object> metadata,
+        ActionRequestChannel requestChannel,
+        ActionProposerType proposerType) {
 
     public ActionProposal {
         proposalId = proposalId == null || proposalId.isBlank()
@@ -41,9 +43,77 @@ public record ActionProposal(
                 ? proposalId
                 : idempotencyKey.trim();
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        requestChannel = Objects.requireNonNullElse(requestChannel, channelFromOrigin(origin));
+        proposerType = Objects.requireNonNullElse(proposerType, proposerFromOrigin(origin));
+    }
+
+    /**
+     * Compatibility constructor for the 0.1.x proposal shape.
+     */
+    public ActionProposal(
+            String proposalId,
+            String actionId,
+            ActionOrigin origin,
+            String requesterId,
+            String reason,
+            double confidence,
+            Map<String, Object> input,
+            String idempotencyKey,
+            Map<String, Object> metadata) {
+        this(
+                proposalId,
+                actionId,
+                origin,
+                requesterId,
+                reason,
+                confidence,
+                input,
+                idempotencyKey,
+                metadata,
+                null,
+                null);
     }
 
     public static ActionProposal user(String actionId, Map<String, Object> input, String requesterId) {
         return new ActionProposal(null, actionId, ActionOrigin.USER, requesterId, "", 1.0d, input, null, Map.of());
+    }
+
+    public static ActionProposal userFrom(
+            ActionRequestChannel requestChannel,
+            String actionId,
+            Map<String, Object> input,
+            String requesterId) {
+        return new ActionProposal(
+                null,
+                actionId,
+                ActionOrigin.USER,
+                requesterId,
+                "",
+                1.0d,
+                input,
+                null,
+                Map.of(),
+                requestChannel,
+                ActionProposerType.USER);
+    }
+
+    private static ActionRequestChannel channelFromOrigin(ActionOrigin origin) {
+        return switch (origin) {
+            case UI -> ActionRequestChannel.UI;
+            case API -> ActionRequestChannel.API;
+            case MCP -> ActionRequestChannel.MCP;
+            case SCHEDULED_JOB -> ActionRequestChannel.SCHEDULER;
+            case SYSTEM, AI_PLANNER -> ActionRequestChannel.INTERNAL;
+            case USER, UNKNOWN -> ActionRequestChannel.UNKNOWN;
+        };
+    }
+
+    private static ActionProposerType proposerFromOrigin(ActionOrigin origin) {
+        return switch (origin) {
+            case USER, UI -> ActionProposerType.USER;
+            case AI_PLANNER -> ActionProposerType.AI_PLANNER;
+            case SYSTEM, SCHEDULED_JOB -> ActionProposerType.SYSTEM;
+            case API, MCP, UNKNOWN -> ActionProposerType.UNKNOWN;
+        };
     }
 }

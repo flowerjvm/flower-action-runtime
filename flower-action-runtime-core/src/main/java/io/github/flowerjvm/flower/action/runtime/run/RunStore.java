@@ -6,19 +6,37 @@ import java.util.Optional;
 /**
  * Stores persistent action-run state.
  *
- * <p>Concurrency model, current version: single-node / single-worker assumption. The event-loop backend serializes
- * resume on one worker thread and resume is idempotent, which prevents double execution within one process. Multi-node
- * deployments, where several processes recover from the same store, can double-execute without compare-and-set or
- * status-transition-guarded updates. That coordination is not provided yet.</p>
+ * <p>Every state transition uses a versioned compare-and-set operation. Implementations must provide
+ * {@link #compareAndSet(ActionRun, ActionRun)} atomically for the storage scope they represent. Compare-and-set
+ * prevents stale writers from overwriting a newer run, but it does not by itself provide distributed work claiming
+ * or leases.</p>
  */
 public interface RunStore {
+    /**
+     * Creates a new run. Implementations must fail rather than overwrite an existing run with the same id.
+     */
     ActionRun create(ActionRun run);
 
     Optional<ActionRun> find(String runId);
 
-    void update(ActionRun run);
+    /**
+     * Atomically replaces {@code expected} with {@code updated} only when the stored version still matches.
+     * The update must fail without changing storage when the current version is not {@code expected.version()}.
+     * Both values must identify the same Run, and {@code updated.version()} must equal
+     * {@code expected.version() + 1}. Implementations must not expose or use an unconditional overwrite path for
+     * ordinary runtime transitions.
+     */
+    boolean compareAndSet(ActionRun expected, ActionRun updated);
 
     List<ActionRun> findResumable(String tenantId);
+
+    /**
+     * Whether this store can look up a run after the initiating call returns. Deferred and asynchronous execution
+     * requires this capability; durability across process restarts is still implementation-specific.
+     */
+    default boolean supportsResumableRuns() {
+        return true;
+    }
 
     /**
      * Returns a store that intentionally does not remember runs.
@@ -40,13 +58,24 @@ public interface RunStore {
             }
 
             @Override
-            public void update(ActionRun run) {
-                // noop
+            public boolean compareAndSet(ActionRun expected, ActionRun updated) {
+                if (!expected.runId().equals(updated.runId())) {
+                    throw new IllegalArgumentException("compare-and-set run ids must match");
+                }
+                if (updated.version() != expected.version() + 1L) {
+                    throw new IllegalArgumentException("updated run version must be expected version + 1");
+                }
+                return true;
             }
 
             @Override
             public List<ActionRun> findResumable(String tenantId) {
                 return List.of();
+            }
+
+            @Override
+            public boolean supportsResumableRuns() {
+                return false;
             }
         };
     }

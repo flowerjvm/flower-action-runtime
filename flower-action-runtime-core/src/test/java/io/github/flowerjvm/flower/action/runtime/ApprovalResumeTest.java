@@ -11,6 +11,8 @@ import io.github.flowerjvm.flower.action.runtime.audit.AuditEvent;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditSink;
 import io.github.flowerjvm.flower.action.runtime.duplicate.InMemoryDuplicateActionPolicy;
+import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecision;
+import io.github.flowerjvm.flower.action.runtime.policy.PolicyGate;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
 import io.github.flowerjvm.flower.action.runtime.run.InMemoryRunStore;
@@ -192,6 +194,44 @@ class ApprovalResumeTest {
         assertThat(completed.status()).isEqualTo(ActionRunStatus.DENIED);
         assertThat(completed.failureReason()).contains("input expired");
         assertThat(executor.calls()).isZero();
+    }
+
+    @Test
+    void approvedRunReevaluatesPolicyAndDeniesWhenAuthorityChanged() {
+        InMemoryRunStore runStore = new InMemoryRunStore();
+        RecordingAuditSink audit = new RecordingAuditSink();
+        AtomicInteger evaluations = new AtomicInteger();
+        PolicyGate changingPolicy = (proposal, definition, context) -> evaluations.incrementAndGet() == 1
+                ? PolicyDecision.requireApproval("manager approval required")
+                : PolicyDecision.deny("requester permission was revoked");
+        CountingExecutor executor = new CountingExecutor(
+                writeAction("UpdateReport"),
+                ActionExecutionResult.succeeded(Map.of()));
+        DefaultActionRuntime runtime = new DefaultActionRuntime(
+                new InMemoryActionRegistry(List.of(executor)),
+                ActionInputValidator.allowAll(),
+                changingPolicy,
+                null,
+                new InMemoryDuplicateActionPolicy(),
+                audit,
+                null,
+                runStore);
+        ExecutionContext context = context("run-policy-revalidation");
+
+        runtime.handle(aiProposal("proposal-policy-revalidation", "UpdateReport"), context);
+        ActionRun waiting = runStore.find(context.runId()).orElseThrow();
+
+        ActionExecutionResult result = runtime.resume(
+                context.runId(),
+                ApprovalDecision.approved(waiting.approvalId(), "admin"));
+
+        assertThat(result.status()).isEqualTo(ActionExecutionStatus.DENIED);
+        assertThat(result.code()).isEqualTo("POLICY_REVALIDATION_DENIED");
+        assertThat(result.message()).contains("permission was revoked");
+        assertThat(runStore.find(context.runId()).orElseThrow().status()).isEqualTo(ActionRunStatus.DENIED);
+        assertThat(executor.calls()).isZero();
+        assertThat(evaluations).hasValue(2);
+        assertThat(audit.types()).contains(AuditEventType.POLICY_REEVALUATED);
     }
 
     @Test

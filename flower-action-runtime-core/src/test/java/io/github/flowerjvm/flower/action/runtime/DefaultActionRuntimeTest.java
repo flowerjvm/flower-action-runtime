@@ -12,9 +12,13 @@ import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditSink;
 import io.github.flowerjvm.flower.action.runtime.audit.TraceSink;
 import io.github.flowerjvm.flower.action.runtime.duplicate.InMemoryDuplicateActionPolicy;
+import io.github.flowerjvm.flower.action.runtime.guard.PreExecutionGuard;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyGate;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecision;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecisionType;
+import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
+import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
+import io.github.flowerjvm.flower.action.runtime.run.InMemoryRunStore;
 import io.github.flowerjvm.flower.action.runtime.validation.ActionInputValidator;
 import org.junit.jupiter.api.Test;
 
@@ -52,8 +56,95 @@ class DefaultActionRuntimeTest {
                 AuditEventType.ACTION_RESOLVED,
                 AuditEventType.VALIDATION_COMPLETED,
                 AuditEventType.POLICY_EVALUATED,
+                AuditEventType.PRE_EXECUTION_CHECKED,
                 AuditEventType.ACTION_EXECUTION_STARTED,
                 AuditEventType.ACTION_EXECUTION_COMPLETED);
+    }
+
+    @Test
+    void keepsRequestChannelProposerAndExecutionPrincipalSeparate() {
+        ActionProposal proposal = ActionProposal.userFrom(
+                ActionRequestChannel.API,
+                "ReadStatus",
+                Map.of(),
+                "proposer-user");
+        ExecutionContext context = new ExecutionContext(
+                "tenant-1",
+                "principal-user",
+                "run-identity",
+                "trace-identity",
+                Map.of());
+
+        assertThat(proposal.requestChannel()).isEqualTo(ActionRequestChannel.API);
+        assertThat(proposal.proposerType()).isEqualTo(ActionProposerType.USER);
+        assertThat(proposal.requesterId()).isEqualTo("proposer-user");
+        assertThat(context.userId()).isEqualTo("principal-user");
+    }
+
+    @Test
+    void duplicateRunIdFailureDoesNotOverwriteExistingRun() {
+        InMemoryRunStore runStore = new InMemoryRunStore();
+        ExecutionContext context = new ExecutionContext(
+                "tenant-1", "user-1", "run-already-exists", "trace-1", Map.of());
+        ActionProposal proposal = ActionProposal.user("ReadStatus", Map.of(), "user-1");
+        ActionRun existing = ActionRun.requested(proposal, context).toBuilder()
+                .status(ActionRunStatus.SUCCEEDED)
+                .result(ActionExecutionResult.succeeded(Map.of("original", true)))
+                .build();
+        runStore.create(existing);
+        ActionDefinition definition = definition("ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionOrigin.USER));
+        DefaultActionRuntime runtime = new DefaultActionRuntime(
+                new InMemoryActionRegistry(List.of(new StubExecutor(
+                        definition,
+                        ActionExecutionResult.succeeded(Map.of("replacement", true))))),
+                null,
+                PolicyGate.allowAll(),
+                null,
+                new InMemoryDuplicateActionPolicy(),
+                null,
+                null,
+                runStore);
+
+        ActionExecutionResult result = runtime.handle(proposal, context);
+
+        assertThat(result.status()).isEqualTo(ActionExecutionStatus.FAILED);
+        assertThat(runStore.find(context.runId())).contains(existing);
+    }
+
+    @Test
+    void preExecutionGuardStopsSideEffectWithStableCode() {
+        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        AtomicInteger calls = new AtomicInteger();
+        ActionExecutor executor = new ActionExecutor() {
+            @Override
+            public ActionDefinition definition() {
+                return definition;
+            }
+
+            @Override
+            public ActionExecutionResult execute(ActionExecutionContext context) {
+                calls.incrementAndGet();
+                return ActionExecutionResult.succeeded(Map.of());
+            }
+        };
+        DefaultActionRuntime runtime = new DefaultActionRuntime(
+                new InMemoryActionRegistry(List.of(executor)),
+                ActionInputValidator.allowAll(),
+                PolicyGate.allowAll(),
+                ApprovalGate.unsupported(),
+                new InMemoryDuplicateActionPolicy(),
+                null,
+                null,
+                io.github.flowerjvm.flower.action.runtime.run.RunStore.noop(),
+                PreExecutionGuard.denyAll("RESOURCE_VERSION_CHANGED", "Approved resource state is stale."));
+
+        ActionExecutionResult result = runtime.handle(
+                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                ExecutionContext.of("tenant-1", "user-1"));
+
+        assertThat(result.status()).isEqualTo(ActionExecutionStatus.DENIED);
+        assertThat(result.code()).isEqualTo("RESOURCE_VERSION_CHANGED");
+        assertThat(calls).hasValue(0);
     }
 
     @Test

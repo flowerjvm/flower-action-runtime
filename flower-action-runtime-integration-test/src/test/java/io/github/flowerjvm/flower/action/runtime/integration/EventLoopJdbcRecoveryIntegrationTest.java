@@ -88,6 +88,7 @@ class EventLoopJdbcRecoveryIntegrationTest {
         EventWorker worker = EventWorker.builder("integration-approval-worker")
                 .clock(clock)
                 .eventBus(InMemoryEventBus.create())
+                .asyncExecutor(Runnable::run)
                 .build();
         return EventLoopActionRuntime.create(
                 new InMemoryActionRegistry(List.of(executor)),

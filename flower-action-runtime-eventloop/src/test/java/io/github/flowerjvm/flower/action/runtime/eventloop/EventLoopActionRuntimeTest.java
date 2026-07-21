@@ -29,8 +29,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -151,6 +153,47 @@ class EventLoopActionRuntimeTest {
         assertThat(fixture.audit.types()).contains(AuditEventType.APPROVAL_APPROVED);
     }
 
+    @Test
+    void approvalResolutionLeavesWorkerTickBeforeDomainExecution() {
+        InMemoryRunStore runStore = new InMemoryRunStore();
+        ManualClock clock = new ManualClock(1_000L);
+        CountingExecutor executor = new CountingExecutor(
+                writeAction("UpdateReport"),
+                ActionExecutionResult.succeeded(Map.of("updated", true)));
+        QueuedExecutor executionLane = new QueuedExecutor();
+        EventWorker worker = EventWorker.builder("non-blocking-approval-worker")
+                .clock(clock)
+                .eventBus(InMemoryEventBus.create())
+                .asyncExecutor(executionLane)
+                .build();
+        EventLoopActionRuntime runtime = EventLoopActionRuntime.create(
+                new InMemoryActionRegistry(List.of(executor)),
+                ActionInputValidator.allowAll(),
+                new DefaultPolicyGate(),
+                null,
+                new InMemoryDuplicateActionPolicy(),
+                null,
+                null,
+                runStore,
+                worker,
+                clock,
+                100L);
+
+        runtime.handle(aiProposal("proposal-offload", "UpdateReport"), context("run-event-offload"));
+        ActionRun waiting = runStore.find("run-event-offload").orElseThrow();
+        runtime.signalApproval(ApprovalDecision.approved(waiting.approvalId(), "admin"));
+
+        assertThat(executor.calls()).isZero();
+        assertThat(executionLane.pending()).isEqualTo(1);
+        assertThat(worker.activeCount()).isZero();
+
+        executionLane.runNext();
+
+        assertThat(executor.calls()).isEqualTo(1);
+        assertThat(runStore.find("run-event-offload").orElseThrow().status())
+                .isEqualTo(ActionRunStatus.SUCCEEDED);
+    }
+
     private static Fixture fixture(long startMillis, long approvalTimeoutMillis) {
         return fixture(new InMemoryRunStore(), new ManualClock(startMillis), approvalTimeoutMillis);
     }
@@ -162,6 +205,7 @@ class EventLoopActionRuntimeTest {
         EventWorker worker = EventWorker.builder("approval-worker")
                 .clock(clock)
                 .eventBus(InMemoryEventBus.create())
+                .asyncExecutor(Runnable::run)
                 .build();
         EventLoopActionRuntime runtime = EventLoopActionRuntime.create(
                 new InMemoryActionRegistry(List.of(executor)),
@@ -244,6 +288,23 @@ class EventLoopActionRuntimeTest {
 
         List<AuditEventType> types() {
             return events.stream().map(AuditEvent::type).toList();
+        }
+    }
+
+    private static final class QueuedExecutor implements java.util.concurrent.Executor {
+        private final Queue<Runnable> tasks = new ArrayDeque<>();
+
+        @Override
+        public void execute(Runnable command) {
+            tasks.add(command);
+        }
+
+        int pending() {
+            return tasks.size();
+        }
+
+        void runNext() {
+            tasks.remove().run();
         }
     }
 }

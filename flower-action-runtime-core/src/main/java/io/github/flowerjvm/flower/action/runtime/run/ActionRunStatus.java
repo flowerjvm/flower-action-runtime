@@ -6,6 +6,7 @@ public enum ActionRunStatus {
     POLICY_EVALUATED,
     WAITING_APPROVAL,
     RUNNING,
+    WAITING_EXTERNAL,
     SUCCEEDED,
     FAILED,
     DENIED,

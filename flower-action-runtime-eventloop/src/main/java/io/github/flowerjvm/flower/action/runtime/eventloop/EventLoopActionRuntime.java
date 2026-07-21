@@ -7,7 +7,7 @@ import io.github.flowerjvm.flower.action.runtime.ActionProposal;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRegistry;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
-import io.github.flowerjvm.flower.action.runtime.ActionRuntime;
+import io.github.flowerjvm.flower.action.runtime.CompletableActionRuntime;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalDecision;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalGate;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditSink;
@@ -15,6 +15,7 @@ import io.github.flowerjvm.flower.action.runtime.DefaultActionRuntime;
 import io.github.flowerjvm.flower.action.runtime.duplicate.DuplicateActionPolicy;
 import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyGate;
+import io.github.flowerjvm.flower.action.runtime.guard.PreExecutionGuard;
 import io.github.flowerjvm.flower.action.runtime.run.RunStore;
 import io.github.flowerjvm.flower.action.runtime.audit.TraceSink;
 import io.github.flowerjvm.flower.core.context.ExecutionContext.Builder;
@@ -26,7 +27,7 @@ import io.github.flowerjvm.flower.eventloop.worker.EventWorker;
 import java.time.Instant;
 import java.util.Objects;
 
-public final class EventLoopActionRuntime implements ActionRuntime {
+public final class EventLoopActionRuntime implements CompletableActionRuntime {
     public static final String FLOW_TYPE = "agent-approval";
     public static final String APPROVAL_SIGNAL = "approval";
     private static final long DEFAULT_APPROVAL_TIMEOUT_MILLIS = 300_000L;
@@ -62,6 +63,34 @@ public final class EventLoopActionRuntime implements ActionRuntime {
             EventWorker worker,
             Clock clock,
             long approvalTimeoutMillis) {
+        return create(
+                registry,
+                validator,
+                policyGate,
+                approvalGate,
+                duplicatePolicy,
+                auditSink,
+                traceSink,
+                runStore,
+                worker,
+                clock,
+                approvalTimeoutMillis,
+                PreExecutionGuard.allowAll());
+    }
+
+    public static EventLoopActionRuntime create(
+            ActionRegistry registry,
+            ActionInputValidator validator,
+            PolicyGate policyGate,
+            ApprovalGate approvalGate,
+            DuplicateActionPolicy duplicatePolicy,
+            AuditSink auditSink,
+            TraceSink traceSink,
+            RunStore runStore,
+            EventWorker worker,
+            Clock clock,
+            long approvalTimeoutMillis,
+            PreExecutionGuard preExecutionGuard) {
         RunStore effectiveRunStore = Objects.requireNonNull(runStore, "runStore must not be null");
         DefaultActionRuntime delegate = new DefaultActionRuntime(
                 registry,
@@ -71,7 +100,8 @@ public final class EventLoopActionRuntime implements ActionRuntime {
                 duplicatePolicy,
                 auditSink,
                 traceSink,
-                effectiveRunStore);
+                effectiveRunStore,
+                preExecutionGuard);
         return new EventLoopActionRuntime(delegate, effectiveRunStore, worker, clock, approvalTimeoutMillis);
     }
 
@@ -91,6 +121,24 @@ public final class EventLoopActionRuntime implements ActionRuntime {
         park(parked.runId(), parked.approvalId(), remainingMillis(parked), parked.tenantId());
         drainIfManual();
         return result;
+    }
+
+    @Override
+    public ActionExecutionResult resume(String runId, ApprovalDecision decision) {
+        return delegate.resume(runId, decision);
+    }
+
+    @Override
+    public ActionExecutionResult complete(
+            String runId,
+            String attemptToken,
+            ActionExecutionResult result) {
+        return delegate.complete(runId, attemptToken, result);
+    }
+
+    @Override
+    public ActionExecutionResult cancel(String runId, String reason) {
+        return delegate.cancel(runId, reason);
     }
 
     public void signalApproval(ApprovalDecision decision) {
@@ -127,10 +175,13 @@ public final class EventLoopActionRuntime implements ActionRuntime {
             return run;
         }
         ActionRun updated = run.toBuilder()
+                .version(run.version() + 1L)
                 .dueAt(Instant.ofEpochMilli(clock.currentTimeMillis() + approvalTimeoutMillis))
                 .build();
-        runStore.update(updated);
-        return updated;
+        if (runStore.compareAndSet(run, updated)) {
+            return updated;
+        }
+        return runStore.find(run.runId()).orElse(run);
     }
 
     private long remainingMillis(ActionRun run) {

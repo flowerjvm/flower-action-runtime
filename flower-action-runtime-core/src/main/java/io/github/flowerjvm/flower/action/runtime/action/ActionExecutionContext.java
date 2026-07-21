@@ -8,7 +8,8 @@ public record ActionExecutionContext(
         ExecutionContext executionContext,
         ActionProposal proposal,
         ActionDefinition definition,
-        Map<String, Object> input) {
+        Map<String, Object> input,
+        String attemptToken) {
 
     public ActionExecutionContext {
         if (executionContext == null) {
@@ -21,5 +22,17 @@ public record ActionExecutionContext(
             throw new IllegalArgumentException("definition must not be null");
         }
         input = input == null ? Map.of() : Map.copyOf(input);
+        attemptToken = attemptToken == null ? "" : attemptToken.trim();
+    }
+
+    /**
+     * Compatibility constructor for synchronous 0.1.x executors.
+     */
+    public ActionExecutionContext(
+            ExecutionContext executionContext,
+            ActionProposal proposal,
+            ActionDefinition definition,
+            Map<String, Object> input) {
+        this(executionContext, proposal, definition, input, "");
     }
 }

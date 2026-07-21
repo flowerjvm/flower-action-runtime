@@ -1,7 +1,7 @@
 # flower-action-runtime
 
 [![CI](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.flowerjvm/flower-action-runtime-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.flowerjvm/flower-action-runtime-core/0.1.0)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.flowerjvm/flower-action-runtime-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.flowerjvm/flower-action-runtime-core/0.2.0)
 
 Controlled action runtime for AI-assisted business systems.
 
@@ -13,13 +13,12 @@ leaves the same audit trail.
 
 The unit of control is the action, not the agent.
 
-Project status: `0.1.0`. The core runtime is usable for early
-experiments and host-application validation. APIs may still change before a
-1.0 release. Public artifacts are available from Maven Central.
+Project status: the current release line is `0.2.0`. The core runtime is usable for early experiments and
+host-application validation. APIs may still change before a 1.0 release.
 
 ## Install From Maven Central
 
-All public modules use the `io.github.flowerjvm` group and version `0.1.0`.
+All public modules use the `io.github.flowerjvm` group and version `0.2.0`.
 No custom repository, neighboring source checkout, or `mavenLocal()` is
 required.
 
@@ -29,7 +28,7 @@ Gradle Kotlin DSL:
 
 ```kotlin
 dependencies {
-    implementation("io.github.flowerjvm:flower-action-runtime-core:0.1.0")
+    implementation("io.github.flowerjvm:flower-action-runtime-core:0.2.0")
 }
 ```
 
@@ -39,7 +38,7 @@ Maven:
 <dependency>
     <groupId>io.github.flowerjvm</groupId>
     <artifactId>flower-action-runtime-core</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
@@ -47,10 +46,10 @@ Choose additional modules only when the corresponding backend is needed:
 
 | Use case | Artifact |
 | --- | --- |
-| Direct controlled-action pipeline | `io.github.flowerjvm:flower-action-runtime-core:0.1.0` |
-| Flower Flow / Step backend | `io.github.flowerjvm:flower-action-runtime-workflow:0.1.0` |
-| JDBC `ActionRun` persistence | `io.github.flowerjvm:flower-action-runtime-persistence-jdbc:0.1.0` |
-| Event-loop approval and resume backend | `io.github.flowerjvm:flower-action-runtime-eventloop:0.1.0` |
+| Direct controlled-action pipeline | `io.github.flowerjvm:flower-action-runtime-core:0.2.0` |
+| Flower Flow / Step backend | `io.github.flowerjvm:flower-action-runtime-workflow:0.2.0` |
+| JDBC `ActionRun` persistence | `io.github.flowerjvm:flower-action-runtime-persistence-jdbc:0.2.0` |
+| Event-loop approval and resume backend | `io.github.flowerjvm:flower-action-runtime-eventloop:0.2.0` |
 
 ## The Side Effects Are Already There
 
@@ -126,6 +125,8 @@ ActionExecutionResult result = runtime.handle(
 switch (result.status()) {
     case SUCCEEDED         -> reply("Created " + result.output().get("reportId"));
     case PENDING_APPROVAL  -> reply("Waiting for approval for run " + result.output().get("runId"));
+    case ACCEPTED          -> reply("Running asynchronously as " + result.output().get("runId"));
+    case CANCELLED         -> reply("Cancelled: " + result.code());
     case DENIED            -> reply("Not allowed: " + result.message());
     case VALIDATION_FAILED -> reply("Bad input: " + result.message());
     case FAILED            -> reply("Failed: " + result.message());
@@ -153,11 +154,13 @@ User / UI / REST / Batch / Scheduler / MCP / AI planner
         |   resolve-action         unregistered action -> DENIED
         |   validate-input         host-defined input validation
         |   evaluate-policy        allow / deny / require approval
+        |   pre-execution-check    recheck volatile host/domain state
         |   execute-action         your ActionExecutor, finally
         |   record-result          run state + duplicate bookkeeping, always
         v
   ActionExecutionResult
-        SUCCEEDED | PENDING_APPROVAL | DENIED | VALIDATION_FAILED | FAILED
+        SUCCEEDED | PENDING_APPROVAL | ACCEPTED | CANCELLED
+        DENIED | VALIDATION_FAILED | FAILED
 ```
 
 Gates run in order; any gate can short-circuit; the finalize stage always
@@ -185,7 +188,7 @@ Record layer        RunStore + AuditSink
 And the objects that carry a request through those layers:
 
 ```text
-ActionProposal        who wants what, with which input, why, how confident
+ActionProposal        what is proposed, request channel, proposer type and rationale
 ExecutionContext      whose execution: tenant, user, runId, traceId, metadata
 ActionDefinition      what an action IS: effect, risk, allowed origins, approval default
 ActionExecutor        the only way the runtime touches your domain code
@@ -312,13 +315,35 @@ String runId = (String) result.output().get("runId");
 var approved = runtime.resume(
         runId,
         ApprovalDecision.approved(approvalId, "manager-42"));
-// the action executes now, through the same validate -> execute -> record path
+// the action executes now, through validate -> policy recheck
+// -> PreExecutionGuard -> execute -> record
 ```
 
 `ApprovalDecision.rejected(...)` denies the run; `ApprovalDecision.expired(...)`
 expires it. Either way the outcome, the decider, and the reason land in the
 run record and the audit trail. With `flower-action-runtime-persistence-jdbc`
 the waiting run survives a restart.
+
+## Async And Deferred Actions
+
+Synchronous `ActionExecutor` implementations remain unchanged. Short
+in-process work can implement `AsyncActionExecutor`; durable jobs and remote
+workers implement `DeferredActionExecutor`. Both return immediately with
+`ACCEPTED` while the persisted Run stays in `WAITING_EXTERNAL`.
+
+External completion uses the Run's attempt token:
+
+```java
+ActionExecutionResult completed = runtime.complete(
+        runId,
+        attemptToken,
+        ActionExecutionResult.succeeded(Map.of("jobId", jobId)));
+```
+
+`runtime.cancel(runId, reason)` records a terminal cancellation and prevents a
+late completion from changing the Run. See
+[Deferred Action Execution](docs/architecture/DEFERRED_ACTION_EXECUTION.md)
+for the executor contracts, durability boundary, and JDBC upgrade scripts.
 
 ## What You Stop Hand-Rolling
 
@@ -387,10 +412,10 @@ The runtime decides whether the operation's business action may happen.
 The pipeline semantics live in one place; how the stages are driven is
 pluggable:
 
-- `DefaultActionRuntime` (core): direct, synchronous, in-thread. The
-  reference backend.
+- `DefaultActionRuntime` (core): direct, in-thread initiation with optional
+  deferred completion. The reference backend.
 - `flower-action-runtime-workflow`: runs the same stages as Flower
-  `Flow`/`Step` for observability — dumps, listeners, admin views. Not the
+  `Flow`/`Step` for observability (dumps, listeners, admin views). Not the
   durable-wait backend.
 - `flower-action-runtime-eventloop` (experimental): approval waits, deadlines,
   resume, and callback-driven execution on `flower-eventloop`.
@@ -401,7 +426,7 @@ behavior.
 ## Modules
 
 Every module below except the integration-test module is published to Maven
-Central at version `0.1.0`.
+Central at version `0.2.0`.
 
 | Module | Status | Purpose |
 | --- | --- | --- |
@@ -423,7 +448,8 @@ What the current implementation gets right:
 
 What it does not do yet:
 
-- multi-node compare-and-set run claiming is not implemented
+- run state transitions use compare-and-set; distributed work claiming and leases are not implemented
+- approval decisions need host redelivery/reconciliation until the resumed Run transition commits
 - annotation-based Spring convenience is planned, not implemented
 - external policy engines (OPA, Cerbos) are an intentional `PolicyGate`
   integration, not bundled
@@ -444,6 +470,8 @@ This repository targets Java 21.
 - [Runtime Boundary And Layers](docs/vision/RUNTIME_BOUNDARY_AND_LAYERS.md)
 - [Execution Backend Strategy](docs/architecture/EXECUTION_BACKEND_STRATEGY.md)
 - [Action Run Persistence](docs/architecture/ACTION_RUN_PERSISTENCE.md)
+- [Deferred Action Execution](docs/architecture/DEFERRED_ACTION_EXECUTION.md)
+- [0.2 Migration And Module Impact](docs/architecture/V0_2_MIGRATION_AND_MODULE_IMPACT.md)
 - [Controlled Action State Machine](docs/architecture/CONTROLLED_ACTION_STATE_MACHINE.md)
 - [Minimal Control Model](docs/architecture/MINIMAL_CONTROL_MODEL.md)
 - [Worker Annotation Model](docs/architecture/WORKER_ANNOTATION_MODEL.md)

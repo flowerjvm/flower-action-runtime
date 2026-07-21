@@ -8,6 +8,8 @@ import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRegistry;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
@@ -41,6 +43,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class JdbcRunStoreTest {
     @Test
+    void compareAndSetRejectsStaleWriter() {
+        JdbcRunStore store = store();
+        ActionRun original = fullRun("run-cas").version(0L).build();
+        store.create(original);
+        ActionRun firstUpdate = original.toBuilder()
+                .version(1L)
+                .status(ActionRunStatus.SUCCEEDED)
+                .build();
+        ActionRun staleUpdate = original.toBuilder()
+                .version(1L)
+                .status(ActionRunStatus.CANCELLED)
+                .build();
+
+        assertThat(store.compareAndSet(original, firstUpdate)).isTrue();
+        assertThat(store.compareAndSet(original, staleUpdate)).isFalse();
+        assertThat(store.find(original.runId())).contains(firstUpdate);
+    }
+
+    @Test
     void roundTripsActionRunWithAllFields() {
         JdbcRunStore store = store();
         ActionRun run = fullRun("run-round-trip")
@@ -67,32 +88,6 @@ class JdbcRunStoreTest {
         assertThat(loaded.dueAt()).isNull();
         assertThat(loaded.result()).isNull();
         assertThat(loaded).isEqualTo(run);
-    }
-
-    @Test
-    void updateUpsertsMissingRunAndUpdatesExistingRun() {
-        DataSource dataSource = dataSource();
-        JdbcRunStore store = JdbcRunStore.create(dataSource);
-        ActionRun insertedByUpdate = fullRun("run-upsert")
-                .status(ActionRunStatus.REQUESTED)
-                .currentStage("record-proposal")
-                .build();
-
-        store.update(insertedByUpdate);
-
-        assertThat(store.find(insertedByUpdate.runId())).contains(insertedByUpdate);
-        assertThat(rowCount(dataSource)).isEqualTo(1);
-
-        ActionRun updated = insertedByUpdate.toBuilder()
-                .status(ActionRunStatus.RUNNING)
-                .currentStage("execute-action")
-                .updatedAt(Instant.parse("2026-01-01T00:00:10Z"))
-                .build();
-
-        store.update(updated);
-
-        assertThat(store.find(updated.runId())).contains(updated);
-        assertThat(rowCount(dataSource)).isEqualTo(1);
     }
 
     @Test
@@ -271,17 +266,6 @@ class JdbcRunStoreTest {
         }
     }
 
-    private static int rowCount(DataSource dataSource) {
-        try (Connection connection = dataSource.getConnection();
-             Statement statement = connection.createStatement();
-             java.sql.ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) FROM action_run")) {
-            resultSet.next();
-            return resultSet.getInt(1);
-        } catch (SQLException ex) {
-            throw new IllegalStateException("Failed to count rows", ex);
-        }
-    }
-
     private static ActionRun.Builder fullRun(String runId) {
         return ActionRun.builder()
                 .runId(runId)
@@ -293,6 +277,8 @@ class JdbcRunStoreTest {
                 .proposalId(runId + "-proposal")
                 .requesterId("requester-1")
                 .origin(ActionOrigin.USER)
+                .requestChannel(ActionRequestChannel.API)
+                .proposerType(ActionProposerType.USER)
                 .proposalReason("planner rationale")
                 .proposalConfidence(0.9d)
                 .proposalMetadata(Map.of("model", "x"))
@@ -345,6 +331,8 @@ class JdbcRunStoreTest {
         assertThat(actual.proposalId()).isEqualTo(expected.proposalId());
         assertThat(actual.requesterId()).isEqualTo(expected.requesterId());
         assertThat(actual.origin()).isEqualTo(expected.origin());
+        assertThat(actual.requestChannel()).isEqualTo(expected.requestChannel());
+        assertThat(actual.proposerType()).isEqualTo(expected.proposerType());
         assertThat(actual.proposalReason()).isEqualTo(expected.proposalReason());
         assertThat(actual.proposalConfidence()).isEqualTo(expected.proposalConfidence());
         assertThat(actual.proposalMetadata()).isEqualTo(expected.proposalMetadata());

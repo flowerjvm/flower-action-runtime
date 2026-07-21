@@ -1,5 +1,15 @@
 # Execution Backend Strategy
 
+> **0.2 implementation status:** the core runtime now exposes a
+> `CompletableActionRuntime` contract for approval resume, correlated deferred
+> completion, and cancellation. Async futures and external commands park an
+> `ActionRun` in `WAITING_EXTERNAL`; the `RunStore` is the durable truth. The
+> event-loop module currently owns durable approval parking/recovery, while
+> external completion may arrive through any host transport. See
+> [Deferred Action Execution](DEFERRED_ACTION_EXECUTION.md). References below to
+> these capabilities as "future" describe the original design sequence, not the
+> current 0.2 source state.
+
 This document defines how `flower-action-runtime` should relate to Flower,
 flower-eventloop, LangGraph-style graphs, and future execution backends.
 
@@ -9,7 +19,8 @@ The key decision:
 Controlled-action semantics = engine-neutral ActionPipeline (core).
 Reference backend        = DefaultActionRuntime (direct, synchronous).
 Observability backend    = flower-core Flow/Step (flower-action-runtime-workflow).
-Durable-wait backend     = future flower-eventloop (flower-action-runtime-eventloop).
+Approval-wait backend    = flower-eventloop (flower-action-runtime-eventloop).
+Deferred completion     = CompletableActionRuntime + durable RunStore + host transport.
 Optional graph backend   = future LangGraph4j adapter.
 Public runtime identity  = ActionRegistry + PolicyGate + Approval + Audit.
 ```
@@ -97,24 +108,28 @@ Do not build human-approval, long external waits, or resume-after-restart on the
 workflow backend. It cannot suspend. Its `ActionExecutionSession` is an in-memory
 object that is discarded when `handle(...)` returns.
 
-`flower-action-runtime-eventloop` (future, on `flower-eventloop`) is the
-**durable-wait** backend. `flower-eventloop` is purpose-built for LLM responses,
-MCP/tool callbacks, approval events, external-system responses, and large numbers
-of mostly-idle actions, with durable await checkpoints (signal name/key plus
-deadline). Approval-as-`await(signal(...))`, async execution via `thenRunAsync`,
-timeout/cancel, and durable resume belong here.
+`flower-action-runtime-eventloop` is the **approval-wait** backend. It parks a
+persisted `WAITING_APPROVAL` Run on a correlated signal and can rebuild those
+waits from `RunStore.findResumable(...)` after restart. The signal is a delivery
+mechanism; the host approval system must be able to redeliver or reconcile the
+decision until the resumed Run transition commits.
 
-Two constraints on that future work:
+Approval resolution uses `EventStepResult.thenRunAsync(...)`; it does not call
+the action pipeline on the EventLoop worker tick. Hosts must configure the
+`EventWorker` with a bounded, appropriately isolated `asyncExecutor` lane.
 
-```text
-1. Build it together with the first real wait feature (approval-wait), and
-   validate it in a host application (for example ArchDox) - not before, or it
-   is just a heavier no-op wrapper like the current synchronous drive.
-2. Adopting it requires evolving the ActionRuntime contract to a suspend/resume-
-   aware shape. The synchronous handle(proposal, ctx) -> ActionExecutionResult
-   cannot express "SUSPENDED, awaiting signal X, resume later"; today it can only
-   return PENDING_APPROVAL and forget.
-```
+The public lifecycle contract has evolved to `CompletableActionRuntime`.
+`handle(...)` may return `PENDING_APPROVAL` or `ACCEPTED`; a later `resume(...)`,
+`complete(...)`, or `cancel(...)` performs a versioned Run transition. External
+jobs do not require an event-loop worker to remain occupied: a host queue,
+webhook, message consumer, or scheduler can call the same completion contract.
+The current event-loop adapter parks approval waits, not arbitrary external-job
+timers; external timeout/reconciliation remains a host responsibility.
+
+The current `ActionRun` stores the approval id and the resulting lifecycle
+transition, but not a separate durable approval-decision inbox/outbox record.
+Exactly-once handoff from an external approval database therefore requires host
+transactional delivery or reconciliation.
 
 `flower-eventloop` is an MVP/experimental module whose API is not yet stable.
 Coupling the durable backend to it is acceptable because both are pre-1.0 and are
@@ -126,7 +141,8 @@ meant to co-evolve, but it is a deliberate bet on an experimental engine.
 flower-action-runtime-core       ActionPipeline + contracts (engine-neutral, the truth)
   DefaultActionRuntime          direct synchronous reference backend
 flower-action-runtime-workflow   flower-core Flow/Step observability backend
-flower-action-runtime-eventloop  future flower-eventloop durable-wait backend
+flower-action-runtime-eventloop  flower-eventloop approval-wait backend
+flower-action-runtime-persistence-jdbc  durable RunStore + atomic CAS
 ```
 
 ## Core Rule

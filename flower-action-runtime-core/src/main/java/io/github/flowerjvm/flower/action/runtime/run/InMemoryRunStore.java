@@ -1,9 +1,11 @@
 package io.github.flowerjvm.flower.action.runtime.run;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * In-memory run store for tests, single-process demos, and local development.
@@ -17,7 +19,10 @@ public final class InMemoryRunStore implements RunStore {
 
     @Override
     public ActionRun create(ActionRun run) {
-        byId.put(run.runId(), run);
+        ActionRun existing = byId.putIfAbsent(run.runId(), run);
+        if (existing != null) {
+            throw new IllegalStateException("Action run already exists: " + run.runId());
+        }
         return run;
     }
 
@@ -27,8 +32,24 @@ public final class InMemoryRunStore implements RunStore {
     }
 
     @Override
-    public void update(ActionRun run) {
-        byId.put(run.runId(), run);
+    public boolean compareAndSet(ActionRun expected, ActionRun updated) {
+        Objects.requireNonNull(expected, "expected run must not be null");
+        Objects.requireNonNull(updated, "updated run must not be null");
+        if (!expected.runId().equals(updated.runId())) {
+            throw new IllegalArgumentException("compare-and-set run ids must match");
+        }
+        if (updated.version() != expected.version() + 1L) {
+            throw new IllegalArgumentException("updated run version must be expected version + 1");
+        }
+        AtomicBoolean replaced = new AtomicBoolean();
+        byId.compute(expected.runId(), (runId, current) -> {
+            if (current == null || current.version() != expected.version()) {
+                return current;
+            }
+            replaced.set(true);
+            return updated;
+        });
+        return replaced.get();
     }
 
     @Override

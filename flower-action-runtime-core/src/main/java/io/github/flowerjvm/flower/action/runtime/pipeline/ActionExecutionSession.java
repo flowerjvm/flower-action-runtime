@@ -13,9 +13,11 @@ import io.github.flowerjvm.flower.action.runtime.audit.AuditSink;
 import io.github.flowerjvm.flower.action.runtime.audit.TraceSink;
 import io.github.flowerjvm.flower.action.runtime.duplicate.DuplicateActionDecision;
 import io.github.flowerjvm.flower.action.runtime.duplicate.DuplicateActionPolicy;
+import io.github.flowerjvm.flower.action.runtime.guard.PreExecutionGuard;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecision;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyGate;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
+import io.github.flowerjvm.flower.action.runtime.run.ConcurrentActionRunUpdateException;
 import io.github.flowerjvm.flower.action.runtime.run.RunStore;
 import io.github.flowerjvm.flower.action.runtime.validation.ActionInputValidator;
 import io.github.flowerjvm.flower.action.runtime.validation.ValidationResult;
@@ -37,11 +39,13 @@ public final class ActionExecutionSession {
     private final ActionRegistry registry;
     private final ActionInputValidator inputValidator;
     private final PolicyGate policyGate;
+    private final PreExecutionGuard preExecutionGuard;
     private final ApprovalGate approvalGate;
     private final DuplicateActionPolicy duplicateActionPolicy;
     private final AuditSink auditSink;
     private final TraceSink traceSink;
     private final RunStore runStore;
+    private final DeferredCompletionSink deferredCompletionSink;
 
     private ActionRun run;
     private DuplicateActionDecision duplicateDecision;
@@ -51,6 +55,8 @@ public final class ActionExecutionSession {
     private PolicyDecision policyDecision;
     private ActionExecutionResult result;
     private boolean actionExecutionStarted;
+    private boolean runCreated;
+    private Runnable afterFinalize;
 
     public ActionExecutionSession(
             ActionProposal proposal,
@@ -63,17 +69,76 @@ public final class ActionExecutionSession {
             AuditSink auditSink,
             TraceSink traceSink,
             RunStore runStore) {
+        this(
+                proposal,
+                context,
+                registry,
+                inputValidator,
+                policyGate,
+                approvalGate,
+                duplicateActionPolicy,
+                auditSink,
+                traceSink,
+                runStore,
+                PreExecutionGuard.allowAll(),
+                DeferredCompletionSink.unsupported());
+    }
+
+    public ActionExecutionSession(
+            ActionProposal proposal,
+            ExecutionContext context,
+            ActionRegistry registry,
+            ActionInputValidator inputValidator,
+            PolicyGate policyGate,
+            ApprovalGate approvalGate,
+            DuplicateActionPolicy duplicateActionPolicy,
+            AuditSink auditSink,
+            TraceSink traceSink,
+            RunStore runStore,
+            PreExecutionGuard preExecutionGuard) {
+        this(
+                proposal,
+                context,
+                registry,
+                inputValidator,
+                policyGate,
+                approvalGate,
+                duplicateActionPolicy,
+                auditSink,
+                traceSink,
+                runStore,
+                preExecutionGuard,
+                DeferredCompletionSink.unsupported());
+    }
+
+    public ActionExecutionSession(
+            ActionProposal proposal,
+            ExecutionContext context,
+            ActionRegistry registry,
+            ActionInputValidator inputValidator,
+            PolicyGate policyGate,
+            ApprovalGate approvalGate,
+            DuplicateActionPolicy duplicateActionPolicy,
+            AuditSink auditSink,
+            TraceSink traceSink,
+            RunStore runStore,
+            PreExecutionGuard preExecutionGuard,
+            DeferredCompletionSink deferredCompletionSink) {
         this.proposal = Objects.requireNonNull(proposal, "proposal must not be null");
         this.context = Objects.requireNonNull(context, "context must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
         this.inputValidator = Objects.requireNonNull(inputValidator, "inputValidator must not be null");
         this.policyGate = Objects.requireNonNull(policyGate, "policyGate must not be null");
+        this.preExecutionGuard = Objects.requireNonNull(preExecutionGuard, "preExecutionGuard must not be null");
         this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate must not be null");
         this.duplicateActionPolicy =
                 Objects.requireNonNull(duplicateActionPolicy, "duplicateActionPolicy must not be null");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink must not be null");
         this.traceSink = Objects.requireNonNull(traceSink, "traceSink must not be null");
         this.runStore = Objects.requireNonNull(runStore, "runStore must not be null");
+        this.deferredCompletionSink = Objects.requireNonNull(
+                deferredCompletionSink,
+                "deferredCompletionSink must not be null");
         this.run = ActionRun.requested(proposal, context);
     }
 
@@ -89,6 +154,65 @@ public final class ActionExecutionSession {
             AuditSink auditSink,
             TraceSink traceSink,
             RunStore runStore) {
+        return forResume(
+                existingRun,
+                proposal,
+                context,
+                registry,
+                inputValidator,
+                policyGate,
+                approvalGate,
+                duplicateActionPolicy,
+                auditSink,
+                traceSink,
+                runStore,
+                PreExecutionGuard.allowAll(),
+                DeferredCompletionSink.unsupported());
+    }
+
+    public static ActionExecutionSession forResume(
+            ActionRun existingRun,
+            ActionProposal proposal,
+            ExecutionContext context,
+            ActionRegistry registry,
+            ActionInputValidator inputValidator,
+            PolicyGate policyGate,
+            ApprovalGate approvalGate,
+            DuplicateActionPolicy duplicateActionPolicy,
+            AuditSink auditSink,
+            TraceSink traceSink,
+            RunStore runStore,
+            PreExecutionGuard preExecutionGuard) {
+        return forResume(
+                existingRun,
+                proposal,
+                context,
+                registry,
+                inputValidator,
+                policyGate,
+                approvalGate,
+                duplicateActionPolicy,
+                auditSink,
+                traceSink,
+                runStore,
+                preExecutionGuard,
+                DeferredCompletionSink.unsupported());
+    }
+
+    public static ActionExecutionSession forResume(
+            ActionRun existingRun,
+            ActionProposal proposal,
+            ExecutionContext context,
+            ActionRegistry registry,
+            ActionInputValidator inputValidator,
+            PolicyGate policyGate,
+            ApprovalGate approvalGate,
+            DuplicateActionPolicy duplicateActionPolicy,
+            AuditSink auditSink,
+            TraceSink traceSink,
+            RunStore runStore,
+            PreExecutionGuard preExecutionGuard,
+            DeferredCompletionSink deferredCompletionSink) {
         ActionExecutionSession session = new ActionExecutionSession(
                 proposal,
                 context,
@@ -99,8 +223,11 @@ public final class ActionExecutionSession {
                 duplicateActionPolicy,
                 auditSink,
                 traceSink,
-                runStore);
+                runStore,
+                preExecutionGuard,
+                deferredCompletionSink);
         session.run = Objects.requireNonNull(existingRun, "existingRun must not be null");
+        session.runCreated = true;
         session.duplicateDecision(DuplicateActionDecision.accept());
         return session;
     }
@@ -122,7 +249,8 @@ public final class ActionExecutionSession {
                 .currentStage(stageId)
                 .updatedAt(Instant.now())
                 .build();
-        runStore.create(run);
+        run = Objects.requireNonNull(runStore.create(run), "created run must not be null");
+        runCreated = true;
     }
 
     void enterStage(String stageId) {
@@ -130,11 +258,16 @@ public final class ActionExecutionSession {
     }
 
     void updateRun(UnaryOperator<ActionRun> op) {
-        run = Objects.requireNonNull(op.apply(run), "updated run must not be null")
+        ActionRun expected = run;
+        ActionRun updated = Objects.requireNonNull(op.apply(expected), "updated run must not be null")
                 .toBuilder()
+                .version(expected.version() + 1L)
                 .updatedAt(Instant.now())
                 .build();
-        runStore.update(run);
+        if (!runStore.compareAndSet(expected, updated)) {
+            throw new ConcurrentActionRunUpdateException(expected.runId(), expected.version());
+        }
+        run = updated;
     }
 
     ActionRegistry registry() {
@@ -147,6 +280,34 @@ public final class ActionExecutionSession {
 
     PolicyGate policyGate() {
         return policyGate;
+    }
+
+    PreExecutionGuard preExecutionGuard() {
+        return preExecutionGuard;
+    }
+
+    RunStore runStore() {
+        return runStore;
+    }
+
+    boolean runCreated() {
+        return runCreated;
+    }
+
+    DeferredCompletionSink deferredCompletionSink() {
+        return deferredCompletionSink;
+    }
+
+    void afterFinalize(Runnable action) {
+        this.afterFinalize = Objects.requireNonNull(action, "action must not be null");
+    }
+
+    void runAfterFinalize() {
+        Runnable action = afterFinalize;
+        afterFinalize = null;
+        if (action != null) {
+            action.run();
+        }
     }
 
     ApprovalGate approvalGate() {

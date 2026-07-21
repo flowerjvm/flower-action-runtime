@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
 import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
+import io.github.flowerjvm.flower.action.runtime.RetryDisposition;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecisionType;
@@ -30,6 +33,7 @@ public final class JdbcRunStore implements RunStore {
     };
     private static final String COLUMNS = String.join(", ",
             "run_id",
+            "version",
             "tenant_id",
             "user_id",
             "trace_id",
@@ -38,6 +42,8 @@ public final class JdbcRunStore implements RunStore {
             "proposal_id",
             "requester_id",
             "origin",
+            "request_channel",
+            "proposer_type",
             "proposal_reason",
             "proposal_confidence",
             "proposal_metadata_json",
@@ -50,17 +56,22 @@ public final class JdbcRunStore implements RunStore {
             "approval_id",
             "due_at",
             "attempt_token",
+            "external_operation_id",
+            "external_operation_metadata_json",
             "result_status",
+            "result_code",
             "result_message",
             "result_output_json",
+            "result_retry_disposition",
             "failure_reason",
             "created_at",
             "updated_at");
     private static final String INSERT_SQL = "INSERT INTO action_run (" + COLUMNS + ") VALUES ("
-            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    private static final String UPDATE_SQL = """
+            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    private static final String COMPARE_AND_SET_SQL = """
             UPDATE action_run
-            SET tenant_id = ?,
+            SET version = ?,
+                tenant_id = ?,
                 user_id = ?,
                 trace_id = ?,
                 context_metadata_json = ?,
@@ -68,6 +79,8 @@ public final class JdbcRunStore implements RunStore {
                 proposal_id = ?,
                 requester_id = ?,
                 origin = ?,
+                request_channel = ?,
+                proposer_type = ?,
                 proposal_reason = ?,
                 proposal_confidence = ?,
                 proposal_metadata_json = ?,
@@ -80,13 +93,17 @@ public final class JdbcRunStore implements RunStore {
                 approval_id = ?,
                 due_at = ?,
                 attempt_token = ?,
+                external_operation_id = ?,
+                external_operation_metadata_json = ?,
                 result_status = ?,
+                result_code = ?,
                 result_message = ?,
                 result_output_json = ?,
+                result_retry_disposition = ?,
                 failure_reason = ?,
                 created_at = ?,
                 updated_at = ?
-            WHERE run_id = ?
+            WHERE run_id = ? AND version = ?
             """;
     private static final String FIND_SQL = "SELECT " + COLUMNS + " FROM action_run WHERE run_id = ?";
 
@@ -133,15 +150,26 @@ public final class JdbcRunStore implements RunStore {
     }
 
     @Override
-    public void update(ActionRun run) {
-        Objects.requireNonNull(run, "run must not be null");
-        try (Connection connection = dataSource.getConnection()) {
-            int updated = update(connection, run);
-            if (updated == 0) {
-                insertAfterMissingUpdate(connection, run);
+    public boolean compareAndSet(ActionRun expected, ActionRun updated) {
+        Objects.requireNonNull(expected, "expected run must not be null");
+        Objects.requireNonNull(updated, "updated run must not be null");
+        if (!expected.runId().equals(updated.runId())) {
+            throw new IllegalArgumentException("compare-and-set run ids must match");
+        }
+        if (updated.version() != expected.version() + 1L) {
+            throw new IllegalArgumentException("updated run version must be expected version + 1");
+        }
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(COMPARE_AND_SET_SQL)) {
+            int index = bindMutableColumns(statement, 1, updated);
+            statement.setString(index++, expected.runId());
+            statement.setLong(index++, expected.version());
+            if (index != 36) {
+                throw new IllegalStateException("Unexpected compare-and-set bind count: " + index);
             }
+            return statement.executeUpdate() == 1;
         } catch (SQLException ex) {
-            throw new RunStoreException("Failed to update action run " + run.runId(), ex);
+            throw new RunStoreException("Failed to compare-and-set action run " + expected.runId(), ex);
         }
     }
 
@@ -180,43 +208,17 @@ public final class JdbcRunStore implements RunStore {
         }
     }
 
-    private int update(Connection connection, ActionRun run) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(UPDATE_SQL)) {
-            bindUpdate(statement, run);
-            return statement.executeUpdate();
-        }
-    }
-
-    private void insertAfterMissingUpdate(Connection connection, ActionRun run) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(INSERT_SQL)) {
-            bindInsert(statement, run);
-            statement.executeUpdate();
-        } catch (SQLException insertFailure) {
-            int updated = update(connection, run);
-            if (updated == 0) {
-                throw insertFailure;
-            }
-        }
-    }
-
     private void bindInsert(PreparedStatement statement, ActionRun run) throws SQLException {
         int index = 1;
         statement.setString(index++, run.runId());
         index = bindMutableColumns(statement, index, run);
-        if (index != 28) {
+        if (index != 35) {
             throw new IllegalStateException("Unexpected insert bind count: " + index);
         }
     }
 
-    private void bindUpdate(PreparedStatement statement, ActionRun run) throws SQLException {
-        int index = bindMutableColumns(statement, 1, run);
-        statement.setString(index++, run.runId());
-        if (index != 28) {
-            throw new IllegalStateException("Unexpected update bind count: " + index);
-        }
-    }
-
     private int bindMutableColumns(PreparedStatement statement, int index, ActionRun run) throws SQLException {
+        statement.setLong(index++, run.version());
         statement.setString(index++, run.tenantId());
         statement.setString(index++, run.userId());
         statement.setString(index++, run.traceId());
@@ -225,6 +227,8 @@ public final class JdbcRunStore implements RunStore {
         statement.setString(index++, run.proposalId());
         statement.setString(index++, run.requesterId());
         statement.setString(index++, run.origin().name());
+        statement.setString(index++, run.requestChannel().name());
+        statement.setString(index++, run.proposerType().name());
         statement.setString(index++, run.proposalReason());
         statement.setDouble(index++, run.proposalConfidence());
         statement.setString(index++, writeJson(run.proposalMetadata()));
@@ -237,10 +241,14 @@ public final class JdbcRunStore implements RunStore {
         statement.setString(index++, run.approvalId());
         setNullableInstant(statement, index++, run.dueAt());
         statement.setString(index++, run.attemptToken());
+        statement.setString(index++, run.externalOperationId());
+        statement.setString(index++, writeJson(run.externalOperationMetadata()));
         ActionExecutionResult result = run.result();
         setNullableEnum(statement, index++, result == null ? null : result.status());
+        statement.setString(index++, result == null ? "" : result.code());
         statement.setString(index++, result == null ? "" : result.message());
         statement.setString(index++, result == null ? "{}" : writeJson(result.output()));
+        setNullableEnum(statement, index++, result == null ? null : result.retryDisposition());
         statement.setString(index++, run.failureReason());
         statement.setLong(index++, run.createdAt().toEpochMilli());
         statement.setLong(index++, run.updatedAt().toEpochMilli());
@@ -250,6 +258,7 @@ public final class JdbcRunStore implements RunStore {
     private ActionRun mapRun(ResultSet resultSet) throws SQLException {
         return ActionRun.builder()
                 .runId(resultSet.getString("run_id"))
+                .version(resultSet.getLong("version"))
                 .tenantId(resultSet.getString("tenant_id"))
                 .userId(resultSet.getString("user_id"))
                 .traceId(resultSet.getString("trace_id"))
@@ -258,6 +267,8 @@ public final class JdbcRunStore implements RunStore {
                 .proposalId(resultSet.getString("proposal_id"))
                 .requesterId(resultSet.getString("requester_id"))
                 .origin(ActionOrigin.valueOf(resultSet.getString("origin")))
+                .requestChannel(ActionRequestChannel.valueOf(resultSet.getString("request_channel")))
+                .proposerType(ActionProposerType.valueOf(resultSet.getString("proposer_type")))
                 .proposalReason(resultSet.getString("proposal_reason"))
                 .proposalConfidence(resultSet.getDouble("proposal_confidence"))
                 .proposalMetadata(readMap(resultSet.getString("proposal_metadata_json")))
@@ -270,6 +281,8 @@ public final class JdbcRunStore implements RunStore {
                 .approvalId(resultSet.getString("approval_id"))
                 .dueAt(readNullableInstant(resultSet, "due_at"))
                 .attemptToken(resultSet.getString("attempt_token"))
+                .externalOperationId(resultSet.getString("external_operation_id"))
+                .externalOperationMetadata(readMap(resultSet.getString("external_operation_metadata_json")))
                 .result(readResult(resultSet))
                 .failureReason(resultSet.getString("failure_reason"))
                 .createdAt(Instant.ofEpochMilli(resultSet.getLong("created_at")))
@@ -289,8 +302,15 @@ public final class JdbcRunStore implements RunStore {
         }
         return new ActionExecutionResult(
                 ActionExecutionStatus.valueOf(status),
+                resultSet.getString("result_code"),
                 resultSet.getString("result_message"),
-                readMap(resultSet.getString("result_output_json")));
+                readMap(resultSet.getString("result_output_json")),
+                readRetryDisposition(resultSet));
+    }
+
+    private RetryDisposition readRetryDisposition(ResultSet resultSet) throws SQLException {
+        String value = resultSet.getString("result_retry_disposition");
+        return value == null || value.isBlank() ? RetryDisposition.NEVER : RetryDisposition.valueOf(value);
     }
 
     private Instant readNullableInstant(ResultSet resultSet, String columnName) throws SQLException {

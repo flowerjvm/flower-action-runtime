@@ -25,7 +25,7 @@ integration-test module is built in CI but excluded from Central publishing.
 3. Create the matching `v`-prefixed Git tag and GitHub Release.
 4. The release workflow signs and publishes the deployable reactor artifacts,
    then waits until Central reports the deployment as published.
-5. Move `main` to the next development version, such as `0.1.1-SNAPSHOT`.
+5. Move `main` to the next development version, such as `0.2.1-SNAPSHOT`.
 
 ## Local dry run
 

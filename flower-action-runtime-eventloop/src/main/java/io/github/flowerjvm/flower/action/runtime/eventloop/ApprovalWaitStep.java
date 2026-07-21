@@ -39,13 +39,15 @@ final class ApprovalWaitStep extends EventStep {
     @Override
     protected EventStepResult onEvent(EventStepContext ctx, Object event) {
         EventSignal signal = (EventSignal) event;
-        delegate.resume(runId, signal.payload(ApprovalDecision.class));
-        return EventStepResult.finish();
+        ApprovalDecision decision = signal.payload(ApprovalDecision.class);
+        return EventStepResult.finish()
+                .thenRunAsync(async -> delegate.resume(runId, decision));
     }
 
     @Override
     protected EventStepResult onTimeout(EventStepContext ctx) {
-        delegate.resume(runId, ApprovalDecision.expired(approvalId));
-        return EventStepResult.finish();
+        ApprovalDecision decision = ApprovalDecision.expired(approvalId);
+        return EventStepResult.finish()
+                .thenRunAsync(async -> delegate.resume(runId, decision));
     }
 }

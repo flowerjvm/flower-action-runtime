@@ -12,29 +12,26 @@ how that entity relates to the Flower checkpoint (see
 
 ## Why This Exists
 
-Today an `ActionProposal` becomes an in-memory `ActionExecutionSession` that the
-pipeline mutates and then discards. There is no persisted answer to the runtime's
-own core question: *what executable work exists, where is it in its lifecycle,
-and what is allowed next?*
-
-The fix is not "decide what to store." What to store is known: **one run/task per
-proposal.** The missing piece is the model itself.
+An `ActionProposal` becomes a transient `ActionExecutionSession`, but the
+session updates a persisted `ActionRun` at every controlled transition. The Run
+answers the runtime's core question: *what executable work exists, where is it
+in its lifecycle, and what is allowed next?*
 
 ```text
-current:  ActionExecutionSession (in memory) -> stages mutate it -> discarded
-target:   ActionRun (persisted)              -> stages update it -> survives restart
+working view: ActionExecutionSession (in memory) -> stages mutate it -> discarded
+durable truth: ActionRun (RunStore)               -> CAS updates -> survives restart
 ```
 
 `ActionRun` is the **business source of truth** for execution state. It is
-engine-neutral and belongs in `flower-action-runtime-core`. Every backend (direct,
-workflow, future event-loop) reads and writes the same `ActionRun`.
+engine-neutral and belongs in `flower-action-runtime-core`. Every backend
+(direct, workflow, event-loop) reads and writes the same `ActionRun`.
 
 ## Relationship To Existing Contracts
 
 ```text
 ActionProposal          the request (already exists)
-ActionRun               persisted execution record (this document, new, core)
-RunStore                persistence SPI for ActionRun (this document, new, core)
+ActionRun               persisted execution record (core)
+RunStore                persistence SPI for ActionRun (core)
 ActionExecutionSession  becomes a transient working view over one ActionRun
 ActionPipeline          each stage reads/updates the ActionRun
 PolicyDecision          summarized into ActionRun (type + reason)
@@ -49,6 +46,7 @@ Flower checkpoint        Flow position only; a recovery aid, not the truth
 ```text
 ActionRun
   runId          stable id for this execution (primary key)
+  version        optimistic-lock version used by RunStore.compareAndSet
   tenantId       execution identity (from ExecutionContext)
   userId
   traceId
@@ -56,7 +54,9 @@ ActionRun
   actionId       which registered action
   proposalId     originating proposal
   requesterId    who/what proposed (user, planner, system, MCP, scheduler)
-  origin         ActionOrigin
+  origin         legacy ActionOrigin compatibility value
+  requestChannel UI/API/CLI/MCP/scheduler/etc. entry point
+  proposerType   user/AI planner/system/service proposer kind
   input          proposal input (Map; serialized by the store)
   duplicateKey   idempotency key reserved for this run
   status         coarse business lifecycle (see ActionRunStatus)
@@ -65,7 +65,8 @@ ActionRun
   approvalId     set when status = WAITING_APPROVAL
   dueAt          deadline for the current wait (approval or execution), if any
   attemptToken   idempotency guard for the execute side effect (see Resume)
-  result         terminal result summary: status + message + output (Map)
+  externalOperationId + metadata  deferred-operation correlation
+  result         status + stable code + message + output + retry disposition
   failureReason  human-readable reason for DENIED/FAILED/EXPIRED/RUNTIME_FAILED
   createdAt
   updatedAt
@@ -82,9 +83,11 @@ session accordingly:
 
 ```text
 Persisted in ActionRun (the durable spine):
-  runId, ids, context metadata, actionId, proposalId, requester, origin, input,
+  runId, version, ids, context metadata, actionId, proposalId, requester,
+  origin, requestChannel, proposerType, input,
   duplicateKey, status, currentStage, policyDecision summary,
-  approvalId, dueAt, attemptToken, result, failureReason, timestamps
+  approvalId, dueAt, attemptToken, external operation data, result,
+  failureReason, timestamps
 
 Re-derived on resume (never persisted):
   executor + definition   -> look up from ActionRegistry by actionId
@@ -115,6 +118,7 @@ VALIDATING        resolving action + validating input
 POLICY_EVALUATED  policy allowed execution; about to run
 WAITING_APPROVAL  parked on an approval interlock (durable wait)
 RUNNING           execute-action in progress (side effects may occur)
+WAITING_EXTERNAL  command/future dispatched; awaiting correlated completion
 SUCCEEDED         terminal: action completed successfully
 FAILED            terminal: executor failed
 DENIED            terminal: unregistered / invalid input / policy denied /
@@ -148,6 +152,18 @@ REQUESTED -> VALIDATING -> POLICY_EVALUATED -> WAITING_APPROVAL
    --(dueAt passed)--> EXPIRED
 ```
 
+Deferred or asynchronous execution:
+
+```text
+REQUESTED -> VALIDATING -> POLICY_EVALUATED -> RUNNING
+   --(dispatch accepted)--> WAITING_EXTERNAL
+   --(matching runId + attemptToken completion)--> SUCCEEDED / FAILED
+   --(cancel)--> CANCELLED
+```
+
+Approval resume always re-resolves the action, re-validates input, re-evaluates
+policy, and runs the pre-execution guard before it can enter `RUNNING`.
+
 Denied early (unregistered / invalid / policy deny / duplicate reject):
 
 ```text
@@ -179,16 +195,23 @@ Gate/runtime failure (validator/policy/duplicate/audit threw):
 public interface RunStore {
     ActionRun create(ActionRun run);          // first persist (REQUESTED)
     Optional<ActionRun> find(String runId);
-    void update(ActionRun run);               // persist a mutation
+    boolean compareAndSet(ActionRun expected, ActionRun updated);
     List<ActionRun> findResumable(String tenantId);  // for recovery
+    boolean supportsResumableRuns();
 }
 ```
 
-- Default `InMemoryRunStore` for tests and the direct/synchronous path.
-- `JdbcRunStore` (future, durable) in an optional module, mirroring
-  `flower-persistence-jdbc`. Core defines only the SPI; no JDBC or JSON in core.
-- `findResumable` returns non-terminal runs (typically `WAITING_APPROVAL`, and
-  `RUNNING` runs that were interrupted) so a startup service can rebuild them.
+- `InMemoryRunStore` provides atomic in-process CAS for tests and local runtimes.
+- `JdbcRunStore` implements database-level CAS in the optional persistence module.
+  Core still defines only the SPI; it has no JDBC or JSON dependency.
+- Every custom store must implement CAS for its storage scope. The runtime SPI
+  intentionally has no unconditional `update`/upsert operation that can bypass
+  the Run version invariant. Administrative repair and backfill belong in a
+  separate tool or migration boundary.
+- `findResumable` returns non-terminal runs such as `WAITING_APPROVAL`,
+  `WAITING_EXTERNAL`, and interrupted `RUNNING` runs.
+- `RunStore.noop()` reports that it cannot resume runs, so async/deferred
+  dispatch is rejected before the executor can start external work.
 
 ### Mandatory durable persist points
 
@@ -199,6 +222,7 @@ store before control returns to the caller:
 create at REQUESTED               (before any side effect)
 WAITING_APPROVAL                  (before returning a parked run)
 RUNNING + attemptToken            (before the execute side effect)
+WAITING_EXTERNAL + operation data (before returning ACCEPTED)
 any terminal status               (SUCCEEDED/FAILED/DENIED/EXPIRED/...)
 ```
 
@@ -283,42 +307,37 @@ hosts the token to build on. This is the durable form of the existing
 flower-action-runtime-core
   ActionRun, ActionRunStatus, RunStore (SPI), InMemoryRunStore
 flower-action-runtime-workflow
-  drives stages, updates ActionRun; may add Flower checkpoint later
-future flower-action-runtime-eventloop
-  same ActionRun; durable await + resume from findResumable
-future flower-action-runtime-persistence-jdbc
+  drives the shared stages and delegates completion/cancellation
+flower-action-runtime-eventloop
+  parks and recovers approval waits; delegates external completion/cancellation
+flower-action-runtime-persistence-jdbc
   JdbcRunStore + schema, opt-in, host-applied SQL
 ```
 
-Incremental adoption (each step ships value alone):
+The 0.2 source line implements the following adoption path:
 
 ```text
-1. Add ActionRun + RunStore(SPI) + InMemoryRunStore to core.
-   ActionExecutionSession holds a reference to the ActionRun; stages update it.
-   Direct + workflow backends persist to the in-memory store. Parity tests assert
-   run state, not just audit.
-2. Add JdbcRunStore. Now the synchronous backends are durable up to their
-   terminal write (crash recovery of terminal/denied runs, run history).
-3. Add real approval-wait: WAITING_APPROVAL becomes a persisted parked state with
-   a resume path. This is where the event-loop backend and a suspend/resume-aware
-   ActionRuntime contract become necessary (see Execution Backend Strategy).
+1. `ActionRun`, `RunStore`, and atomic `InMemoryRunStore` live in core.
+2. `JdbcRunStore` and additive 0.1-to-0.2 migration scripts provide durable CAS.
+3. Approval wait/resume is persisted and handled by the event-loop adapter.
+4. Async futures and deferred external commands share `WAITING_EXTERNAL`,
+   `attemptToken`, correlated completion, and cooperative cancellation.
 ```
 
-Step 1 is the immediate work. It is engine-neutral, testable synchronously, and
-unblocks everything after it.
-
-## Out Of Scope For The First Cut
+## Remaining Boundaries
 
 ```text
-approval resume / suspend semantics   (needs the wait feature + contract change)
 compensation / rollback states
 retry/attempt history beyond one attemptToken
-distributed run ownership / leader election
-JDBC schema and migrations
+distributed work claiming / leases / leader election
+guaranteed physical cancellation of an already-committed external side effect
 ```
 
-Add these only when a host application (ArchDox) proves the need, per the vision
-docs.
+CAS protects state transitions from stale writers. Hosts still need an external
+idempotency key (normally the `attemptToken`) and, for active-active recovery,
+an ownership/lease protocol. Cancellation is cooperative: the runtime prevents
+late completion from changing a terminal run, but cannot undo an external side
+effect that already committed.
 
 ## Open Questions
 

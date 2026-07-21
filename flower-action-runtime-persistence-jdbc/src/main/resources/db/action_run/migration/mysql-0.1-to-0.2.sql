@@ -1,0 +1,7 @@
+ALTER TABLE action_run ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE action_run ADD COLUMN request_channel VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN';
+ALTER TABLE action_run ADD COLUMN proposer_type VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN';
+ALTER TABLE action_run ADD COLUMN external_operation_id VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE action_run ADD COLUMN external_operation_metadata_json LONGTEXT NOT NULL DEFAULT '{}';
+ALTER TABLE action_run ADD COLUMN result_code VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE action_run ADD COLUMN result_retry_disposition VARCHAR(32) NULL;

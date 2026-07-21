@@ -2,7 +2,9 @@ package io.github.flowerjvm.flower.action.runtime.run;
 
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecisionType;
 import java.time.Instant;
@@ -12,6 +14,7 @@ import java.util.UUID;
 
 public record ActionRun(
         String runId,
+        long version,
         String tenantId,
         String userId,
         String traceId,
@@ -20,6 +23,8 @@ public record ActionRun(
         String proposalId,
         String requesterId,
         ActionOrigin origin,
+        ActionRequestChannel requestChannel,
+        ActionProposerType proposerType,
         String proposalReason,
         double proposalConfidence,
         Map<String, Object> proposalMetadata,
@@ -32,6 +37,8 @@ public record ActionRun(
         String approvalId,
         Instant dueAt,
         String attemptToken,
+        String externalOperationId,
+        Map<String, Object> externalOperationMetadata,
         ActionExecutionResult result,
         String failureReason,
         Instant createdAt,
@@ -39,6 +46,7 @@ public record ActionRun(
 
     public ActionRun {
         runId = runId == null || runId.isBlank() ? UUID.randomUUID().toString() : runId.trim();
+        version = Math.max(0L, version);
         tenantId = normalize(tenantId);
         userId = normalize(userId);
         traceId = normalize(traceId);
@@ -47,6 +55,8 @@ public record ActionRun(
         proposalId = normalize(proposalId);
         requesterId = normalize(requesterId);
         origin = Objects.requireNonNullElse(origin, ActionOrigin.UNKNOWN);
+        requestChannel = Objects.requireNonNullElse(requestChannel, ActionRequestChannel.UNKNOWN);
+        proposerType = Objects.requireNonNullElse(proposerType, ActionProposerType.UNKNOWN);
         proposalReason = normalize(proposalReason);
         proposalMetadata = proposalMetadata == null ? Map.of() : Map.copyOf(proposalMetadata);
         input = input == null ? Map.of() : Map.copyOf(input);
@@ -56,6 +66,8 @@ public record ActionRun(
         policyReason = normalize(policyReason);
         approvalId = normalize(approvalId);
         attemptToken = normalize(attemptToken);
+        externalOperationId = normalize(externalOperationId);
+        externalOperationMetadata = externalOperationMetadata == null ? Map.of() : Map.copyOf(externalOperationMetadata);
         failureReason = normalize(failureReason);
         Instant now = Instant.now();
         createdAt = createdAt == null ? now : createdAt;
@@ -76,6 +88,8 @@ public record ActionRun(
                 .proposalId(proposal.proposalId())
                 .requesterId(proposal.requesterId())
                 .origin(proposal.origin())
+                .requestChannel(proposal.requestChannel())
+                .proposerType(proposal.proposerType())
                 .proposalReason(proposal.reason())
                 .proposalConfidence(proposal.confidence())
                 .proposalMetadata(proposal.metadata())
@@ -95,6 +109,7 @@ public record ActionRun(
     public Builder toBuilder() {
         return new Builder()
                 .runId(runId)
+                .version(version)
                 .tenantId(tenantId)
                 .userId(userId)
                 .traceId(traceId)
@@ -103,6 +118,8 @@ public record ActionRun(
                 .proposalId(proposalId)
                 .requesterId(requesterId)
                 .origin(origin)
+                .requestChannel(requestChannel)
+                .proposerType(proposerType)
                 .proposalReason(proposalReason)
                 .proposalConfidence(proposalConfidence)
                 .proposalMetadata(proposalMetadata)
@@ -115,6 +132,8 @@ public record ActionRun(
                 .approvalId(approvalId)
                 .dueAt(dueAt)
                 .attemptToken(attemptToken)
+                .externalOperationId(externalOperationId)
+                .externalOperationMetadata(externalOperationMetadata)
                 .result(result)
                 .failureReason(failureReason)
                 .createdAt(createdAt)
@@ -127,6 +146,7 @@ public record ActionRun(
 
     public static final class Builder {
         private String runId;
+        private long version;
         private String tenantId;
         private String userId;
         private String traceId;
@@ -135,6 +155,8 @@ public record ActionRun(
         private String proposalId;
         private String requesterId;
         private ActionOrigin origin;
+        private ActionRequestChannel requestChannel;
+        private ActionProposerType proposerType;
         private String proposalReason;
         private double proposalConfidence;
         private Map<String, Object> proposalMetadata;
@@ -147,6 +169,8 @@ public record ActionRun(
         private String approvalId;
         private Instant dueAt;
         private String attemptToken;
+        private String externalOperationId;
+        private Map<String, Object> externalOperationMetadata;
         private ActionExecutionResult result;
         private String failureReason;
         private Instant createdAt;
@@ -157,6 +181,11 @@ public record ActionRun(
 
         public Builder runId(String runId) {
             this.runId = runId;
+            return this;
+        }
+
+        public Builder version(long version) {
+            this.version = version;
             return this;
         }
 
@@ -197,6 +226,16 @@ public record ActionRun(
 
         public Builder origin(ActionOrigin origin) {
             this.origin = origin;
+            return this;
+        }
+
+        public Builder requestChannel(ActionRequestChannel requestChannel) {
+            this.requestChannel = requestChannel;
+            return this;
+        }
+
+        public Builder proposerType(ActionProposerType proposerType) {
+            this.proposerType = proposerType;
             return this;
         }
 
@@ -260,6 +299,16 @@ public record ActionRun(
             return this;
         }
 
+        public Builder externalOperationId(String externalOperationId) {
+            this.externalOperationId = externalOperationId;
+            return this;
+        }
+
+        public Builder externalOperationMetadata(Map<String, Object> externalOperationMetadata) {
+            this.externalOperationMetadata = externalOperationMetadata;
+            return this;
+        }
+
         public Builder result(ActionExecutionResult result) {
             this.result = result;
             return this;
@@ -283,6 +332,7 @@ public record ActionRun(
         public ActionRun build() {
             return new ActionRun(
                     runId,
+                    version,
                     tenantId,
                     userId,
                     traceId,
@@ -291,6 +341,8 @@ public record ActionRun(
                     proposalId,
                     requesterId,
                     origin,
+                    requestChannel,
+                    proposerType,
                     proposalReason,
                     proposalConfidence,
                     proposalMetadata,
@@ -303,6 +355,8 @@ public record ActionRun(
                     approvalId,
                     dueAt,
                     attemptToken,
+                    externalOperationId,
+                    externalOperationMetadata,
                     result,
                     failureReason,
                     createdAt,

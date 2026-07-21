@@ -6,6 +6,8 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
+import io.github.flowerjvm.flower.action.runtime.action.ActionDispatch;
+import io.github.flowerjvm.flower.action.runtime.action.DeferredActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
@@ -14,6 +16,9 @@ import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditSink;
 import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.policy.PolicyGate;
+import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
+import io.github.flowerjvm.flower.action.runtime.run.InMemoryRunStore;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -52,6 +57,7 @@ class WorkflowActionRuntimeTest {
                 AuditEventType.ACTION_RESOLVED,
                 AuditEventType.VALIDATION_COMPLETED,
                 AuditEventType.POLICY_EVALUATED,
+                AuditEventType.PRE_EXECUTION_CHECKED,
                 AuditEventType.ACTION_EXECUTION_STARTED,
                 AuditEventType.ACTION_EXECUTION_COMPLETED);
     }
@@ -78,6 +84,50 @@ class WorkflowActionRuntimeTest {
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.PENDING_APPROVAL);
         assertThat(result.output()).containsKey("approvalId");
+    }
+
+    @Test
+    void deferredActionCanCompleteAfterObservableFlowFinishes() {
+        InMemoryRunStore runStore = new InMemoryRunStore();
+        ActionDefinition definition = definition("Maintenance", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        DeferredActionExecutor executor = new DeferredActionExecutor() {
+            @Override
+            public ActionDefinition definition() {
+                return definition;
+            }
+
+            @Override
+            public ActionDispatch.Awaiting dispatchDeferred(ActionExecutionContext context) {
+                return ActionDispatch.awaiting("operation-workflow", null, Map.of());
+            }
+        };
+        WorkflowActionRuntime runtime = new WorkflowActionRuntime(
+                new InMemoryActionRegistry(List.of(executor)),
+                null,
+                PolicyGate.allowAll(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                32,
+                runStore);
+        ExecutionContext context = new ExecutionContext(
+                "tenant-1", "user-1", "run-workflow-deferred", "trace-workflow-deferred", Map.of());
+
+        ActionExecutionResult accepted = runtime.handle(
+                ActionProposal.user("Maintenance", Map.of(), "user-1"),
+                context);
+        var waiting = runStore.find(context.runId()).orElseThrow();
+        ActionExecutionResult completed = runtime.complete(
+                context.runId(),
+                waiting.attemptToken(),
+                ActionExecutionResult.succeeded(Map.of("done", true)));
+
+        assertThat(accepted.status()).isEqualTo(ActionExecutionStatus.ACCEPTED);
+        assertThat(completed.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(runStore.find(context.runId()).orElseThrow().status()).isEqualTo(ActionRunStatus.SUCCEEDED);
     }
 
     private static ActionDefinition definition(

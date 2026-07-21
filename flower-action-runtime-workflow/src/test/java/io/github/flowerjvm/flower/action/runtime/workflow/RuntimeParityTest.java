@@ -133,7 +133,8 @@ class RuntimeParityTest {
         ActionInputValidator throwingValidator = (proposal, definition, context) -> {
             throw new RuntimeException("validator boom");
         };
-        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+        ExecutionContext firstContext = context("run-validator-first");
+        ExecutionContext secondContext = context("run-validator-second");
         ActionProposal first = new ActionProposal("proposal-1", "CreateReport", ActionOrigin.USER,
                 "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
         ActionProposal second = new ActionProposal("proposal-2", "CreateReport", ActionOrigin.USER,
@@ -145,8 +146,8 @@ class RuntimeParityTest {
                 PolicyGate.allowAll(),
                 throwingValidator,
                 runtime -> {
-                    ActionExecutionResult firstResult = runtime.handle(first, context);
-                    ActionExecutionResult secondResult = runtime.handle(second, context);
+                    ActionExecutionResult firstResult = runtime.handle(first, firstContext);
+                    ActionExecutionResult secondResult = runtime.handle(second, secondContext);
                     assertThat(firstResult.status()).isEqualTo(secondResult.status());
                     assertThat(firstResult.message()).isEqualTo(secondResult.message());
                     return secondResult;
@@ -323,7 +324,8 @@ class RuntimeParityTest {
 
     @Test
     void duplicateReturnExistingParity() {
-        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+        ExecutionContext firstContext = context("run-duplicate-first");
+        ExecutionContext secondContext = context("run-duplicate-second");
         ActionProposal first = new ActionProposal("proposal-1", "ReadStatus", ActionOrigin.USER,
                 "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
         ActionProposal second = new ActionProposal("proposal-2", "ReadStatus", ActionOrigin.USER,
@@ -336,8 +338,8 @@ class RuntimeParityTest {
                 null,
                 null,
                 runtime -> {
-                    runtime.handle(first, context);
-                    return runtime.handle(second, context);
+                    runtime.handle(first, firstContext);
+                    return runtime.handle(second, secondContext);
                 });
     }
 
@@ -392,15 +394,20 @@ class RuntimeParityTest {
                         duplicatePolicy, null, null, null, null, 64)
                 : new DefaultActionRuntime(registry, validator, PolicyGate.allowAll(), null,
                         duplicatePolicy, null, null);
-        ExecutionContext context = ExecutionContext.of("tenant-1", "user-1");
+        ExecutionContext firstContext = context("run-transient-validator-first");
+        ExecutionContext secondContext = context("run-transient-validator-second");
         ActionProposal first = new ActionProposal("proposal-1", "CreateReport", ActionOrigin.USER,
                 "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
         ActionProposal second = new ActionProposal("proposal-2", "CreateReport", ActionOrigin.USER,
                 "user-1", "", 1.0d, Map.of(), "same-key", Map.of());
 
-        ActionExecutionResult firstResult = runtime.handle(first, context);
+        ActionExecutionResult firstResult = runtime.handle(first, firstContext);
         assertThat(firstResult.status()).isEqualTo(ActionExecutionStatus.FAILED);
-        return runtime.handle(second, context);
+        return runtime.handle(second, secondContext);
+    }
+
+    private static ExecutionContext context(String runId) {
+        return new ExecutionContext("tenant-1", "user-1", runId, runId + "-trace", Map.of());
     }
 
     private static List<Map<String, Object>> project(List<AuditEvent> events) {
@@ -572,6 +579,9 @@ class RuntimeParityTest {
 
         @Override
         public ActionRun create(ActionRun run) {
+            if (byId.containsKey(run.runId())) {
+                throw new IllegalStateException("Action run already exists: " + run.runId());
+            }
             byId.put(run.runId(), run);
             last = run;
             return run;
@@ -583,9 +593,20 @@ class RuntimeParityTest {
         }
 
         @Override
-        public void update(ActionRun run) {
-            byId.put(run.runId(), run);
-            last = run;
+        public boolean compareAndSet(ActionRun expected, ActionRun updated) {
+            if (!expected.runId().equals(updated.runId())) {
+                throw new IllegalArgumentException("compare-and-set run ids must match");
+            }
+            if (updated.version() != expected.version() + 1L) {
+                throw new IllegalArgumentException("updated run version must be expected version + 1");
+            }
+            ActionRun current = byId.get(expected.runId());
+            if (current == null || current.version() != expected.version()) {
+                return false;
+            }
+            byId.put(updated.runId(), updated);
+            last = updated;
+            return true;
         }
 
         @Override
