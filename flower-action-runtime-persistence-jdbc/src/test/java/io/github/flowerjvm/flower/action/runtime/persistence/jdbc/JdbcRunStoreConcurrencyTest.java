@@ -1,8 +1,9 @@
 package io.github.flowerjvm.flower.action.runtime.persistence.jdbc;
 
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.DefaultActionRuntime;
 import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
@@ -55,7 +56,7 @@ class JdbcRunStoreConcurrencyTest {
         DataSource dataSource = dataSource();
         JdbcRunStore seedStore = JdbcRunStore.create(dataSource);
         ActionRun original = ActionRun.requested(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                userProposal(Map.of()),
                 context("run-jdbc-cas-race"));
         seedStore.create(original);
 
@@ -152,7 +153,7 @@ class JdbcRunStoreConcurrencyTest {
                 "Action was dispatched and is awaiting completion.",
                 Map.of("runId", runId, "operationId", OPERATION_ID));
         return ActionRun.requested(
-                        ActionProposal.user("maintenance.run", Map.of("target", "cache"), "user-1"),
+                        userProposal(Map.of("target", "cache")),
                         context(runId))
                 .toBuilder()
                 .status(ActionRunStatus.WAITING_EXTERNAL)
@@ -166,6 +167,14 @@ class JdbcRunStoreConcurrencyTest {
 
     private static ExecutionContext context(String runId) {
         return new ExecutionContext("tenant-1", "user-1", runId, runId + "-trace", Map.of());
+    }
+
+    private static ActionProposal userProposal(Map<String, Object> input) {
+        return ActionProposal.userFrom(
+                ActionRequestChannel.COMMAND,
+                "maintenance.run",
+                input,
+                "user-1");
     }
 
     private static <T> List<T> runConcurrently(List<? extends Callable<T>> tasks) throws Exception {
@@ -275,7 +284,8 @@ class JdbcRunStoreConcurrencyTest {
                     "",
                     ActionEffect.WRITE,
                     ActionRiskLevel.MEDIUM,
-                    Set.of(ActionOrigin.USER),
+                    Set.of(ActionRequestChannel.COMMAND),
+                    Set.of(ActionProposerType.USER),
                     Set.of(),
                     false,
                     false,

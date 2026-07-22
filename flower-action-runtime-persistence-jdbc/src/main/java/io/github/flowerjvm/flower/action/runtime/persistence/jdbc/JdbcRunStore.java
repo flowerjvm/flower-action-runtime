@@ -5,7 +5,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
 import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.RetryDisposition;
@@ -41,7 +40,6 @@ public final class JdbcRunStore implements RunStore {
             "action_id",
             "proposal_id",
             "requester_id",
-            "origin",
             "request_channel",
             "proposer_type",
             "proposal_reason",
@@ -67,7 +65,7 @@ public final class JdbcRunStore implements RunStore {
             "created_at",
             "updated_at");
     private static final String INSERT_SQL = "INSERT INTO action_run (" + COLUMNS + ") VALUES ("
-            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            + "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     private static final String COMPARE_AND_SET_SQL = """
             UPDATE action_run
             SET version = ?,
@@ -78,7 +76,6 @@ public final class JdbcRunStore implements RunStore {
                 action_id = ?,
                 proposal_id = ?,
                 requester_id = ?,
-                origin = ?,
                 request_channel = ?,
                 proposer_type = ?,
                 proposal_reason = ?,
@@ -164,7 +161,7 @@ public final class JdbcRunStore implements RunStore {
             int index = bindMutableColumns(statement, 1, updated);
             statement.setString(index++, expected.runId());
             statement.setLong(index++, expected.version());
-            if (index != 36) {
+            if (index != 35) {
                 throw new IllegalStateException("Unexpected compare-and-set bind count: " + index);
             }
             return statement.executeUpdate() == 1;
@@ -212,7 +209,7 @@ public final class JdbcRunStore implements RunStore {
         int index = 1;
         statement.setString(index++, run.runId());
         index = bindMutableColumns(statement, index, run);
-        if (index != 35) {
+        if (index != 34) {
             throw new IllegalStateException("Unexpected insert bind count: " + index);
         }
     }
@@ -226,7 +223,6 @@ public final class JdbcRunStore implements RunStore {
         statement.setString(index++, run.actionId());
         statement.setString(index++, run.proposalId());
         statement.setString(index++, run.requesterId());
-        statement.setString(index++, run.origin().name());
         statement.setString(index++, run.requestChannel().name());
         statement.setString(index++, run.proposerType().name());
         statement.setString(index++, run.proposalReason());
@@ -266,7 +262,6 @@ public final class JdbcRunStore implements RunStore {
                 .actionId(resultSet.getString("action_id"))
                 .proposalId(resultSet.getString("proposal_id"))
                 .requesterId(resultSet.getString("requester_id"))
-                .origin(ActionOrigin.valueOf(resultSet.getString("origin")))
                 .requestChannel(ActionRequestChannel.valueOf(resultSet.getString("request_channel")))
                 .proposerType(ActionProposerType.valueOf(resultSet.getString("proposer_type")))
                 .proposalReason(resultSet.getString("proposal_reason"))

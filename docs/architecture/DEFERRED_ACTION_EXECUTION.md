@@ -1,11 +1,11 @@
 # Deferred Action Execution
 
-`flower-action-runtime` 0.2 introduces a non-blocking action lifecycle for work
+`flower-action-runtime` 0.2 introduced a non-blocking action lifecycle for work
 that cannot safely finish inside `ActionRuntime.handle(...)`.
 
 ## Execution Modes
 
-The existing `ActionExecutor` remains the synchronous compatibility contract:
+`SynchronousActionExecutor` is the synchronous contract:
 
 ```text
 dispatch -> Completed(ActionExecutionResult)
@@ -31,6 +31,12 @@ dispatch external command
 -> complete(runId, attemptToken, terminalResult)
 ```
 
+In 0.3 all three modes share only `ActionExecutor.definition()` and
+`dispatch(...)`. `SynchronousActionExecutor`, `AsyncActionExecutor`, and
+`DeferredActionExecutor` expose only the operation appropriate to their mode;
+async/deferred implementations no longer provide a fake `execute(...)` that
+throws `UnsupportedOperationException`.
+
 Use `ActionExecutionDispatcher.using(executor)` when adapting blocking
 in-process work. The supplied executor should be bounded and selected by
 execution character such as blocking risk, priority, or isolation. Action
@@ -55,6 +61,30 @@ in-process `CompletionStage` cannot survive a JVM restart; a recovered
 `WAITING_EXTERNAL` run must be reconciled against host or external-operation
 state.
 
+### Dispatch Atomicity Gap
+
+Deferred dispatch is deliberately not advertised as exactly-once. The runtime
+persists `RUNNING + attemptToken`, invokes the external dispatcher, and then
+persists `WAITING_EXTERNAL + operationId`. A process may stop in this window:
+
+```text
+external system accepted work
+-> process stopped before WAITING_EXTERNAL committed
+-> ActionRun remains RUNNING without the accepted operation id
+```
+
+Every production deferred executor must therefore provide:
+
+- an operation id deterministically derived from stable Run/attempt data;
+- idempotent dispatch under that operation id;
+- authenticated callbacks scoped to tenant, Run, attempt, and operation;
+- reconciliation for old `RUNNING` and `WAITING_EXTERNAL` Runs;
+- timeout and orphan-operation policy.
+
+When database state and queue delivery must be atomic, persist a transactional
+outbox entry and let an idempotent dispatcher publish it. CAS protects the Run
+record; it does not close this external-delivery window.
+
 ## Attempt Tokens
 
 Every execution attempt receives a new `attemptToken` through
@@ -75,6 +105,13 @@ authentication and tenant checks.
 `CANCELLED`. Deferred and async executors may implement cooperative cancellation
 hooks. The runtime does not rely on thread interruption for correctness: any
 late completion is rejected because the stored Run is already terminal.
+
+`CANCELLED` means the runtime will no longer accept normal completion for that
+Run. It is not proof that an external worker, VPN task, file transfer, database
+operation, or remote job physically stopped. Host APIs and user interfaces must
+use the stable cancellation result code and warning output to distinguish a
+confirmed domain cancellation from an unconfirmed external cancellation
+request.
 
 Separate runtime instances can observe the same waiting Run and invoke the
 cooperative cancellation hook before one terminal CAS wins. Cancellation hooks

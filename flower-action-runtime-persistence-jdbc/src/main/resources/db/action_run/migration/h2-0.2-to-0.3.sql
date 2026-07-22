@@ -1,0 +1,1 @@
+ALTER TABLE action_run DROP COLUMN IF EXISTS origin;

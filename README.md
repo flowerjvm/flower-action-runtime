@@ -1,7 +1,7 @@
 # flower-action-runtime
 
 [![CI](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/flowerjvm/flower-action-runtime/actions/workflows/ci.yml)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.flowerjvm/flower-action-runtime-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.flowerjvm/flower-action-runtime-core/0.2.0)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.flowerjvm/flower-action-runtime-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.flowerjvm/flower-action-runtime-core/0.3.0)
 
 Controlled action runtime for AI-assisted business systems.
 
@@ -13,12 +13,13 @@ leaves the same audit trail.
 
 The unit of control is the action, not the agent.
 
-Project status: the current release line is `0.2.0`. The core runtime is usable for early experiments and
-host-application validation. APIs may still change before a 1.0 release.
+Project status: the current release line is `0.3.0`. The core runtime is usable
+for early experiments and host-application validation. APIs may still change
+before a 1.0 release.
 
 ## Install From Maven Central
 
-All public modules use the `io.github.flowerjvm` group and version `0.2.0`.
+All public modules use the `io.github.flowerjvm` group and version `0.3.0`.
 No custom repository, neighboring source checkout, or `mavenLocal()` is
 required.
 
@@ -28,7 +29,7 @@ Gradle Kotlin DSL:
 
 ```kotlin
 dependencies {
-    implementation("io.github.flowerjvm:flower-action-runtime-core:0.2.0")
+    implementation("io.github.flowerjvm:flower-action-runtime-core:0.3.0")
 }
 ```
 
@@ -38,7 +39,7 @@ Maven:
 <dependency>
     <groupId>io.github.flowerjvm</groupId>
     <artifactId>flower-action-runtime-core</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
@@ -46,10 +47,10 @@ Choose additional modules only when the corresponding backend is needed:
 
 | Use case | Artifact |
 | --- | --- |
-| Direct controlled-action pipeline | `io.github.flowerjvm:flower-action-runtime-core:0.2.0` |
-| Flower Flow / Step backend | `io.github.flowerjvm:flower-action-runtime-workflow:0.2.0` |
-| JDBC `ActionRun` persistence | `io.github.flowerjvm:flower-action-runtime-persistence-jdbc:0.2.0` |
-| Event-loop approval and resume backend | `io.github.flowerjvm:flower-action-runtime-eventloop:0.2.0` |
+| Direct controlled-action pipeline | `io.github.flowerjvm:flower-action-runtime-core:0.3.0` |
+| Flower Flow / Step backend | `io.github.flowerjvm:flower-action-runtime-workflow:0.3.0` |
+| JDBC `ActionRun` persistence | `io.github.flowerjvm:flower-action-runtime-persistence-jdbc:0.3.0` |
+| Event-loop approval and resume backend | `io.github.flowerjvm:flower-action-runtime-eventloop:0.3.0` |
 
 ## The Side Effects Are Already There
 
@@ -105,19 +106,18 @@ The allowlist is a `switch`. Policy is an `if` that the next handler forgets.
 A retried LLM turn creates two reports. "Approval" does not exist. The audit
 trail is whatever `log.info` survived refactoring.
 
-After: every origin submits the same proposal to the same runtime.
+After: every entry point submits the same proposal to the same runtime.
 
 ```java
-ActionProposal proposal = new ActionProposal(
-        null,                               // proposalId: generated
-        "report.create",                    // must be registered, or DENIED
-        ActionOrigin.AI_PLANNER,            // policy sees who is asking
-        "planner-7",
-        "Draft report for the site inspection request",
-        0.82,                               // planner confidence
-        Map.of("title", "Site inspection draft"),
-        turnId,                             // idempotency key: a retry cannot execute twice
-        Map.of());
+ActionProposal proposal = ActionProposal.builder("report.create")
+        .requestChannel(ActionRequestChannel.COMMAND) // where it entered
+        .proposerType(ActionProposerType.AI_PLANNER)  // what proposed it
+        .requesterId("planner-7")
+        .reason("Draft report for the site inspection request")
+        .confidence(0.82)
+        .input(Map.of("title", "Site inspection draft"))
+        .idempotencyKey(turnId)              // a retry cannot execute twice
+        .build();
 
 ActionExecutionResult result = runtime.handle(
         proposal, ExecutionContext.of("office-a", "user-1001"));
@@ -150,12 +150,13 @@ User / UI / REST / Batch / Scheduler / MCP / AI planner
   ActionRuntime.handle(proposal, context)
         |
         |   record-proposal        run + audit trail begins
-        |   reserve-duplicate      same idempotency key cannot run twice
         |   resolve-action         unregistered action -> DENIED
         |   validate-input         host-defined input validation
         |   evaluate-policy        allow / deny / require approval
+        |   reserve-duplicate      authorized idempotency reservation
+        |   request-approval       park an approved duplicate reservation
         |   pre-execution-check    recheck volatile host/domain state
-        |   execute-action         your ActionExecutor, finally
+        |   execute-action         your executor, finally
         |   record-result          run state + duplicate bookkeeping, always
         v
   ActionExecutionResult
@@ -178,7 +179,7 @@ Intent layer        user / UI / REST / batch / MCP / AI planner
 Control layer       flower-action-runtime
                       DECIDES: registry, validation, policy, approval, idempotency
 
-Execution layer     ActionExecutor -> your ordinary domain services
+Execution layer     Synchronous / Async / Deferred executor -> domain services
                       PERFORMS: called only after every gate has passed
 
 Record layer        RunStore + AuditSink
@@ -190,8 +191,8 @@ And the objects that carry a request through those layers:
 ```text
 ActionProposal        what is proposed, request channel, proposer type and rationale
 ExecutionContext      whose execution: tenant, user, runId, traceId, metadata
-ActionDefinition      what an action IS: effect, risk, allowed origins, approval default
-ActionExecutor        the only way the runtime touches your domain code
+ActionDefinition      what an action IS: effect, risk, allowed channels/proposers
+ActionExecutor        common dispatch contract for all execution modes
 ActionExecutionResult the explicit outcome every caller must branch on
 ActionRun             the persistent record of one pass through the pipeline
 ```
@@ -200,9 +201,26 @@ ActionRun             the persistent record of one pass through the pipeline
   side effects.
 - `ActionDefinition`: the contract that makes an action governable — its
   `ActionEffect` (read-only / write / ...), `ActionRiskLevel`, allowed
-  origins, and whether approval is required by default.
+  request channels, proposer types, and whether approval is required by default.
 - `PolicyGate` / `ApprovalGate` / `DuplicateActionPolicy` / `AuditSink` /
   `RunStore`: the seams a host application plugs its own rules into.
+
+Use one host-owned factory around `ActionProposal.builder(...)` so controllers,
+bots, schedulers, and callbacks cannot disagree about attribution:
+
+```java
+ActionProposal proposal = ActionProposal.builder("report.create")
+        .requesterId("planner-7")
+        .requestChannel(ActionRequestChannel.COMMAND)
+        .proposerType(ActionProposerType.AI_PLANNER)
+        .input(Map.of("title", "Site inspection"))
+        .idempotencyKey("office-a:report:create:42")
+        .build();
+```
+
+`requestChannel` says where the request entered, `proposerType` says who or
+what suggested it, and `ExecutionContext.userId` is the trusted execution
+principal. Attribution never grants authority by itself.
 
 ## Quick Start
 
@@ -211,16 +229,17 @@ executor is the only path to the side effect.
 
 ```java
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
 import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import java.util.Map;
 import java.util.Set;
 
-final class CreateReportAction implements ActionExecutor {
+final class CreateReportAction implements SynchronousActionExecutor {
     private final ReportService reports;
 
     CreateReportAction(ReportService reports) {
@@ -235,8 +254,9 @@ final class CreateReportAction implements ActionExecutor {
                 "Create a draft report from a controlled request.",
                 ActionEffect.WRITE,
                 ActionRiskLevel.MEDIUM,
-                Set.of(ActionOrigin.USER, ActionOrigin.UI, ActionOrigin.API,
-                        ActionOrigin.AI_PLANNER),
+                Set.of(ActionRequestChannel.UI, ActionRequestChannel.API,
+                        ActionRequestChannel.COMMAND),
+                Set.of(ActionProposerType.USER, ActionProposerType.AI_PLANNER),
                 Set.of("report:write"),   // policy input for a host PolicyGate
                 true,                     // dryRunSupported
                 false,                    // approvalRequiredByDefault
@@ -326,10 +346,12 @@ the waiting run survives a restart.
 
 ## Async And Deferred Actions
 
-Synchronous `ActionExecutor` implementations remain unchanged. Short
-in-process work can implement `AsyncActionExecutor`; durable jobs and remote
-workers implement `DeferredActionExecutor`. Both return immediately with
-`ACCEPTED` while the persisted Run stays in `WAITING_EXTERNAL`.
+Synchronous work implements `SynchronousActionExecutor`. Short in-process work
+implements `AsyncActionExecutor`; durable jobs and remote workers implement
+`DeferredActionExecutor`. These are separate contracts: async/deferred
+executors no longer inherit a synchronous `execute(...)` method that can only
+throw. Async and deferred dispatch return immediately with `ACCEPTED` while the
+persisted Run stays in `WAITING_EXTERNAL`.
 
 External completion uses the Run's attempt token:
 
@@ -340,10 +362,23 @@ ActionExecutionResult completed = runtime.complete(
         ActionExecutionResult.succeeded(Map.of("jobId", jobId)));
 ```
 
-`runtime.cancel(runId, reason)` records a terminal cancellation and prevents a
-late completion from changing the Run. See
+Deferred dispatch is not an exactly-once boundary. A process can stop after an
+external system accepts work but before `WAITING_EXTERNAL` and the operation id
+are persisted. Use a deterministic operation id, idempotent dispatch,
+authenticated callbacks, reconciliation, and an outbox when atomic database to
+queue delivery is required.
+
+`runtime.cancel(runId, reason)` records a terminal runtime cancellation and
+prevents a late completion from changing the Run. It does not prove that an
+external worker physically stopped. Inspect the result code, retry disposition,
+and `cancellationWarning` output before presenting cancellation as confirmed.
+See
 [Deferred Action Execution](docs/architecture/DEFERRED_ACTION_EXECUTION.md)
 for the executor contracts, durability boundary, and JDBC upgrade scripts.
+
+Unknown failures default to `MANUAL_REVIEW`. Executors should use
+`retryableFailure`, `correctableFailure`, `permanentFailure`, or
+`manualReviewFailure` so callers never infer retry safety from a human message.
 
 ## What You Stop Hand-Rolling
 
@@ -353,9 +388,9 @@ rebuild a control plane you did not mean to write — once per entry point.
 | What the boundary eventually needs | Hand-rolled | With the runtime |
 | --- | --- | --- |
 | Only known actions can run | A `switch` per handler; new tools bypass old checks. | `ActionRegistry`; unregistered action IDs are denied before any code runs. |
-| Permission and origin rules | `if` statements scattered per controller, job, and handler. | One `PolicyGate` sees every proposal with its origin, definition, and context. |
+| Permission and attribution rules | `if` statements scattered per controller, job, and handler. | One `PolicyGate` sees the trusted principal, tenant, request channel, proposer type, and definition. |
 | Human approval for risky writes | Ad-hoc status column, custom endpoint, bespoke state machine. | `PENDING_APPROVAL` result plus `resume(runId, decision)`. |
-| The same request arriving twice | Hope, or a unique-index exception in the middle of a side effect. | `idempotencyKey` reserved before execution by a `DuplicateActionPolicy`. |
+| The same request arriving twice | Hope, or a unique-index exception in the middle of a side effect. | After validation and policy, a tenant/action-scoped `idempotencyKey` is reserved by a `DuplicateActionPolicy`. |
 | "Why did this happen?" | Whatever log lines survived the last refactor. | `AuditSink` events for every stage: proposed, resolved, evaluated, executed. |
 | "Where is that request now?" | Grep the logs. | An `ActionRun` with an explicit status in a `RunStore`. |
 
@@ -426,7 +461,7 @@ behavior.
 ## Modules
 
 Every module below except the integration-test module is published to Maven
-Central at version `0.2.0`.
+Central at version `0.3.0`.
 
 | Module | Status | Purpose |
 | --- | --- | --- |
@@ -472,6 +507,7 @@ This repository targets Java 21.
 - [Action Run Persistence](docs/architecture/ACTION_RUN_PERSISTENCE.md)
 - [Deferred Action Execution](docs/architecture/DEFERRED_ACTION_EXECUTION.md)
 - [0.2 Migration And Module Impact](docs/architecture/V0_2_MIGRATION_AND_MODULE_IMPACT.md)
+- [0.3 Migration And Module Impact](docs/architecture/V0_3_MIGRATION_AND_MODULE_IMPACT.md)
 - [Controlled Action State Machine](docs/architecture/CONTROLLED_ACTION_STATE_MACHINE.md)
 - [Minimal Control Model](docs/architecture/MINIMAL_CONTROL_MODEL.md)
 - [Worker Annotation Model](docs/architecture/WORKER_ANNOTATION_MODEL.md)

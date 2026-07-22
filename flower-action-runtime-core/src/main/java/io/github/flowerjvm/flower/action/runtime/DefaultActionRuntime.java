@@ -247,7 +247,7 @@ public final class DefaultActionRuntime implements CompletableActionRuntime {
             return new ActionExecutionResult(
                     ActionExecutionStatus.DENIED,
                     "ACTION_RUN_NOT_CANCELLABLE_WHILE_RUNNING",
-                    "A synchronous action that is already running cannot be safely cancelled: " + runId,
+                    "An action that is dispatching or already running cannot be safely cancelled: " + runId,
                     Map.of(),
                     RetryDisposition.MANUAL_REVIEW);
         }
@@ -333,15 +333,14 @@ public final class DefaultActionRuntime implements CompletableActionRuntime {
         return new ActionProposal(
                 run.proposalId(),
                 run.actionId(),
-                run.origin(),
+                run.requestChannel(),
+                run.proposerType(),
                 run.requesterId(),
                 run.proposalReason(),
                 run.proposalConfidence(),
                 run.input(),
                 run.duplicateKey(),
-                run.proposalMetadata(),
-                run.requestChannel(),
-                run.proposerType());
+                run.proposalMetadata());
     }
 
     private static ExecutionContext contextFromRun(ActionRun run) {

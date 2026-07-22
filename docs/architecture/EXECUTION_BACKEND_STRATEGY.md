@@ -78,8 +78,9 @@ engine-neutral `ActionPipeline` in `flower-action-runtime-core`, as an ordered l
 of stages over a shared `ActionExecutionSession`.
 
 ```text
-record-proposal -> reserve-duplicate -> resolve-action -> validate-input
--> evaluate-policy -> execute-action -> record-result (finalize)
+record-proposal -> resolve-action -> validate-input -> evaluate-policy
+-> reserve-duplicate -> request-approval -> pre-execution-check
+-> execute-action -> record-result (finalize)
 ```
 
 `DefaultActionRuntime` (direct, synchronous) runs these stages in-thread and is the
@@ -521,10 +522,12 @@ The first observable workflow mapping can be small:
 
 ```text
 record-proposal
-reserve-duplicate
 resolve-action
 validate-input
 evaluate-policy
+reserve-duplicate
+request-approval
+pre-execution-check
 execute-action
 record-result
 ```

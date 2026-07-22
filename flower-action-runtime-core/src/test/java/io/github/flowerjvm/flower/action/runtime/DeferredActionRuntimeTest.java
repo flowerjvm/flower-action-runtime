@@ -36,7 +36,7 @@ class DeferredActionRuntimeTest {
         ExecutionContext context = context("run-deferred");
 
         ActionExecutionResult accepted = runtime.handle(
-                ActionProposal.user("maintenance.run", Map.of("target", "cache"), "user-1"),
+                userProposal(Map.of("target", "cache")),
                 context);
         ActionRun waiting = runStore.find(context.runId()).orElseThrow();
 
@@ -78,7 +78,7 @@ class DeferredActionRuntimeTest {
         ExecutionContext context = context("run-async");
 
         ActionExecutionResult accepted = runtime.handle(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                userProposal(Map.of()),
                 context);
 
         assertThat(accepted.status()).isEqualTo(ActionExecutionStatus.ACCEPTED);
@@ -107,7 +107,7 @@ class DeferredActionRuntimeTest {
                 null);
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                userProposal(Map.of()),
                 context("run-no-store"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.FAILED);
@@ -122,7 +122,7 @@ class DeferredActionRuntimeTest {
         DefaultActionRuntime runtime = runtime(executor, runStore);
         ExecutionContext context = context("run-cancel");
 
-        runtime.handle(ActionProposal.user("maintenance.run", Map.of(), "user-1"), context);
+        runtime.handle(userProposal(Map.of()), context);
         ActionRun waiting = runStore.find(context.runId()).orElseThrow();
 
         ActionExecutionResult cancelled = runtime.cancel(context.runId(), "operator cancelled");
@@ -144,7 +144,7 @@ class DeferredActionRuntimeTest {
         DefaultActionRuntime runtime = runtime(executor, runStore);
         ExecutionContext context = context("run-active-side-effect");
         ActionRun running = ActionRun.requested(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                userProposal(Map.of()),
                 context).toBuilder()
                 .status(ActionRunStatus.RUNNING)
                 .attemptToken("active-attempt")
@@ -177,6 +177,14 @@ class DeferredActionRuntimeTest {
         return new ExecutionContext("tenant-1", "user-1", runId, runId + "-trace", Map.of());
     }
 
+    private static ActionProposal userProposal(Map<String, Object> input) {
+        return ActionProposal.userFrom(
+                ActionRequestChannel.COMMAND,
+                "maintenance.run",
+                input,
+                "user-1");
+    }
+
     private static ActionDefinition definition() {
         return new ActionDefinition(
                 "maintenance.run",
@@ -184,7 +192,8 @@ class DeferredActionRuntimeTest {
                 "",
                 ActionEffect.WRITE,
                 ActionRiskLevel.MEDIUM,
-                Set.of(ActionOrigin.USER),
+                Set.of(ActionRequestChannel.COMMAND),
+                Set.of(ActionProposerType.USER),
                 Set.of(),
                 false,
                 false,

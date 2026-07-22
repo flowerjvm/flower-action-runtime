@@ -6,6 +6,7 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalGate;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEvent;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
@@ -34,7 +35,7 @@ class DefaultActionRuntimeTest {
     @Test
     void executesRegisteredActionThroughPolicyAndAudit() {
         RecordingAuditSink audit = new RecordingAuditSink();
-        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         ActionExecutor executor = new StubExecutor(definition, ActionExecutionResult.succeeded(Map.of("reportId", 10)));
         DefaultActionRuntime runtime = new DefaultActionRuntime(
                 new InMemoryActionRegistry(List.of(executor)),
@@ -46,7 +47,7 @@ class DefaultActionRuntimeTest {
                 TraceSink.noop());
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of("siteId", 1), "user-1"),
+                userProposal("CreateReport", Map.of("siteId", 1), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
@@ -86,13 +87,13 @@ class DefaultActionRuntimeTest {
         InMemoryRunStore runStore = new InMemoryRunStore();
         ExecutionContext context = new ExecutionContext(
                 "tenant-1", "user-1", "run-already-exists", "trace-1", Map.of());
-        ActionProposal proposal = ActionProposal.user("ReadStatus", Map.of(), "user-1");
+        ActionProposal proposal = userProposal("ReadStatus", Map.of(), "user-1");
         ActionRun existing = ActionRun.requested(proposal, context).toBuilder()
                 .status(ActionRunStatus.SUCCEEDED)
                 .result(ActionExecutionResult.succeeded(Map.of("original", true)))
                 .build();
         runStore.create(existing);
-        ActionDefinition definition = definition("ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition("ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionProposerType.USER));
         DefaultActionRuntime runtime = new DefaultActionRuntime(
                 new InMemoryActionRegistry(List.of(new StubExecutor(
                         definition,
@@ -113,9 +114,9 @@ class DefaultActionRuntimeTest {
 
     @Test
     void preExecutionGuardStopsSideEffectWithStableCode() {
-        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         AtomicInteger calls = new AtomicInteger();
-        ActionExecutor executor = new ActionExecutor() {
+        ActionExecutor executor = new SynchronousActionExecutor() {
             @Override
             public ActionDefinition definition() {
                 return definition;
@@ -139,7 +140,7 @@ class DefaultActionRuntimeTest {
                 PreExecutionGuard.denyAll("RESOURCE_VERSION_CHANGED", "Approved resource state is stale."));
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of(), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.DENIED);
@@ -160,7 +161,7 @@ class DefaultActionRuntimeTest {
                 null);
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("UnknownAction", Map.of(), "user-1"),
+                userProposal("UnknownAction", Map.of(), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.DENIED);
@@ -170,7 +171,8 @@ class DefaultActionRuntimeTest {
 
     @Test
     void requiresApprovalForAiPlannerWriteActionByDefault() {
-        ActionDefinition definition = definition("UpdateReport", ActionEffect.WRITE, Set.of(ActionOrigin.AI_PLANNER));
+        ActionDefinition definition = definition(
+                "UpdateReport", ActionEffect.WRITE, Set.of(ActionProposerType.AI_PLANNER));
         ActionExecutor executor = new StubExecutor(definition, ActionExecutionResult.succeeded(Map.of()));
         DefaultActionRuntime runtime = new DefaultActionRuntime(new InMemoryActionRegistry(List.of(executor)));
 
@@ -178,7 +180,8 @@ class DefaultActionRuntimeTest {
                 new ActionProposal(
                         "proposal-1",
                         "UpdateReport",
-                        ActionOrigin.AI_PLANNER,
+                        ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER,
                         "planner",
                         "update report",
                         0.8d,
@@ -193,7 +196,8 @@ class DefaultActionRuntimeTest {
 
     @Test
     void returnsExistingResultForDuplicateIdempotencyKey() {
-        ActionDefinition definition = definition("ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition(
+                "ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionProposerType.USER));
         ActionExecutor executor = new StubExecutor(definition, ActionExecutionResult.succeeded(Map.of("status", "ok")));
         DefaultActionRuntime runtime = new DefaultActionRuntime(
                 new InMemoryActionRegistry(List.of(executor)),
@@ -207,7 +211,8 @@ class DefaultActionRuntimeTest {
         ActionProposal first = new ActionProposal(
                 "proposal-1",
                 "ReadStatus",
-                ActionOrigin.USER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.USER,
                 "user-1",
                 "",
                 1.0d,
@@ -217,7 +222,8 @@ class DefaultActionRuntimeTest {
         ActionProposal second = new ActionProposal(
                 "proposal-2",
                 "ReadStatus",
-                ActionOrigin.USER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.USER,
                 "user-1",
                 "",
                 1.0d,
@@ -233,8 +239,59 @@ class DefaultActionRuntimeTest {
     }
 
     @Test
+    void policyDenialCannotReadAPreviouslyCompletedDuplicateResult() {
+        ActionDefinition definition = definition(
+                "ReadStatus", ActionEffect.READ_ONLY, Set.of(ActionProposerType.USER));
+        AtomicInteger calls = new AtomicInteger();
+        SynchronousActionExecutor executor = new SynchronousActionExecutor() {
+            @Override
+            public ActionDefinition definition() {
+                return definition;
+            }
+
+            @Override
+            public ActionExecutionResult execute(ActionExecutionContext context) {
+                calls.incrementAndGet();
+                return ActionExecutionResult.succeeded(Map.of("secret", "tenant-result"));
+            }
+        };
+        PolicyGate principalPolicy = (proposal, action, context) -> "allowed-user".equals(context.userId())
+                ? PolicyDecision.allow()
+                : PolicyDecision.deny("principal is not authorized");
+        DefaultActionRuntime runtime = new DefaultActionRuntime(
+                new InMemoryActionRegistry(List.of(executor)),
+                null,
+                principalPolicy,
+                null,
+                new InMemoryDuplicateActionPolicy(),
+                null,
+                null);
+        ActionProposal first = userProposal("ReadStatus", Map.of(), "requester").toBuilder()
+                .proposalId("proposal-authorized")
+                .idempotencyKey("shared-result-key")
+                .build();
+        ActionProposal second = first.toBuilder()
+                .proposalId("proposal-unauthorized")
+                .build();
+
+        ActionExecutionResult allowed = runtime.handle(
+                first,
+                ExecutionContext.of("tenant-1", "allowed-user"));
+        ActionExecutionResult denied = runtime.handle(
+                second,
+                ExecutionContext.of("tenant-1", "denied-user"));
+
+        assertThat(allowed.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
+        assertThat(denied.status()).isEqualTo(ActionExecutionStatus.DENIED);
+        assertThat(denied.message()).contains("not authorized");
+        assertThat(denied.output()).doesNotContainKey("secret");
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
     void dryRunFailureStopsBeforeRealExecution() {
-        ActionDefinition definition = dryRunnableDefinition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = dryRunnableDefinition(
+                "CreateReport", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         DryRunExecutor executor = new DryRunExecutor(
                 definition,
                 ActionExecutionResult.failed("dry run rejected"),
@@ -250,7 +307,7 @@ class DefaultActionRuntimeTest {
                 null);
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of(), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.FAILED);
@@ -261,7 +318,8 @@ class DefaultActionRuntimeTest {
 
     @Test
     void dryRunRequiredButUnsupportedIsDeniedBeforeExecution() {
-        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition(
+                "CreateReport", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         DryRunExecutor executor = new DryRunExecutor(
                 definition,
                 ActionExecutionResult.succeeded(Map.of("ok", true)),
@@ -277,7 +335,7 @@ class DefaultActionRuntimeTest {
                 null);
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of(), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.DENIED);
@@ -294,7 +352,8 @@ class DefaultActionRuntimeTest {
                 "",
                 ActionEffect.PRODUCTION_CHANGE,
                 ActionRiskLevel.CRITICAL,
-                Set.of(ActionOrigin.USER),
+                Set.of(ActionRequestChannel.COMMAND),
+                Set.of(ActionProposerType.USER),
                 Set.of(),
                 false,
                 false,
@@ -308,7 +367,7 @@ class DefaultActionRuntimeTest {
                         ActionExecutionResult.succeeded(Map.of())))));
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("DeleteProject", Map.of(), "user-1"),
+                userProposal("DeleteProject", Map.of(), "user-1"),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.PENDING_APPROVAL);
@@ -317,14 +376,15 @@ class DefaultActionRuntimeTest {
     private static ActionDefinition definition(
             String actionId,
             ActionEffect effect,
-            Set<ActionOrigin> allowedOrigins) {
+            Set<ActionProposerType> allowedProposerTypes) {
         return new ActionDefinition(
                 actionId,
                 actionId,
                 "",
                 effect,
                 ActionRiskLevel.MEDIUM,
-                allowedOrigins,
+                Set.of(ActionRequestChannel.COMMAND),
+                allowedProposerTypes,
                 Set.of(),
                 false,
                 false,
@@ -337,14 +397,15 @@ class DefaultActionRuntimeTest {
     private static ActionDefinition dryRunnableDefinition(
             String actionId,
             ActionEffect effect,
-            Set<ActionOrigin> allowedOrigins) {
+            Set<ActionProposerType> allowedProposerTypes) {
         return new ActionDefinition(
                 actionId,
                 actionId,
                 "",
                 effect,
                 ActionRiskLevel.MEDIUM,
-                allowedOrigins,
+                Set.of(ActionRequestChannel.COMMAND),
+                allowedProposerTypes,
                 Set.of(),
                 true,
                 false,
@@ -354,14 +415,22 @@ class DefaultActionRuntimeTest {
                 Map.of());
     }
 
-    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result) implements ActionExecutor {
+    private static ActionProposal userProposal(
+            String actionId,
+            Map<String, Object> input,
+            String requesterId) {
+        return ActionProposal.userFrom(ActionRequestChannel.COMMAND, actionId, input, requesterId);
+    }
+
+    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result)
+            implements SynchronousActionExecutor {
         @Override
         public ActionExecutionResult execute(ActionExecutionContext context) {
             return result;
         }
     }
 
-    private static final class DryRunExecutor implements ActionExecutor {
+    private static final class DryRunExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult dryRunResult;
         private final ActionExecutionResult executeResult;

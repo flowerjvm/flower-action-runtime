@@ -1,7 +1,29 @@
-# 0.2 Migration And Module Impact
+# 0.2.x Migration And Module Impact
 
 This note explains how the `0.2.0` release affects the modules in this
 repository and applications moving from the Maven Central `0.1.0` release.
+
+## 0.2.1 Safety Refinements
+
+The `0.2.1` line keeps the 0.2 executor and RunStore shapes while tightening
+host-facing defaults:
+
+- `ActionProposal.builder(...)` and `toBuilder()` reduce canonical-constructor
+  noise at host adapter boundaries;
+- unknown `FAILED` results now default to `MANUAL_REVIEW`, not
+  `AFTER_BACKOFF`;
+- explicit `retryableFailure`, `correctableFailure`, `permanentFailure`, and
+  `manualReviewFailure` factories make retry intent visible;
+- context-aware duplicate `complete` and `release` overloads let policies keep
+  the same trusted tenant scope used by `reserve`;
+- `InMemoryDuplicateActionPolicy` scopes keys by
+  `tenantId + actionId + idempotencyKey`.
+
+Hosts that intentionally relied on the old implicit `AFTER_BACKOFF` failure
+default must switch to `retryableFailure(...)`. Existing duplicate policy
+implementations remain source-compatible because the context-aware overloads
+delegate to the 0.2.0 methods by default, but multi-tenant implementations
+should override the new overloads.
 
 ## Compatibility Summary
 
@@ -80,6 +102,10 @@ FAILED            execution/runtime failure
 Do not parse `message` to decide retry behavior. Use `code` and
 `RetryDisposition`.
 
+An unclassified failure is not safely retryable. Use an explicit failure
+factory whenever the executor knows whether the condition is transient,
+correctable, permanent, or operationally ambiguous.
+
 ## Deferred Completion And Cancellation
 
 `AsyncActionExecutor` is for bounded in-process asynchronous work.
@@ -98,6 +124,17 @@ be truthfully cancelled and returns
 Cancellation hooks must be idempotent because separate Runtime instances may
 invoke the same external cancellation concurrently before one terminal CAS
 wins.
+
+Deferred dispatch does not make external delivery exactly-once. The process
+can stop after a queue or remote system accepts work but before the operation
+id is committed to `WAITING_EXTERNAL`. Use deterministic operation ids,
+idempotent dispatch, authenticated callbacks, reconciliation, and a
+transactional outbox when atomic database-to-queue delivery is required.
+
+`CANCELLED` is the terminal runtime decision to stop accepting normal
+completion. It is not proof that an external operation physically stopped.
+Surface `ACTION_CANCELLED_EXTERNAL_CANCEL_FAILED` and its `MANUAL_REVIEW`
+guidance distinctly in host APIs and operator interfaces.
 
 ## Verification
 

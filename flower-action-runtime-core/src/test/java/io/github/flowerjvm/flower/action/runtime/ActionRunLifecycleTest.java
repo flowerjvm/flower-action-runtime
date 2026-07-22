@@ -3,10 +3,10 @@ package io.github.flowerjvm.flower.action.runtime;
 import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
 import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRegistry;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalDecision;
 import io.github.flowerjvm.flower.action.runtime.duplicate.InMemoryDuplicateActionPolicy;
 import io.github.flowerjvm.flower.action.runtime.policy.PolicyDecisionType;
@@ -30,7 +30,7 @@ class ActionRunLifecycleTest {
     void storesSuccessfulRunLifecycle() {
         InMemoryRunStore runStore = new InMemoryRunStore();
         DefaultActionRuntime runtime = runtime(
-                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                         ActionExecutionResult.succeeded(Map.of("reportId", 10))),
                 null,
                 PolicyGate.allowAll(),
@@ -38,7 +38,7 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-success");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of("siteId", 1), "user-1"),
+                userProposal("CreateReport", Map.of("siteId", 1)),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -58,7 +58,7 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-unknown");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("MissingAction", Map.of(), "user-1"),
+                userProposal("MissingAction", Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -73,7 +73,7 @@ class ActionRunLifecycleTest {
         InMemoryRunStore runStore = new InMemoryRunStore();
         ActionInputValidator invalid = (proposal, definition, context) -> ValidationResult.invalid("missing siteId");
         DefaultActionRuntime runtime = runtime(
-                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                         ActionExecutionResult.succeeded(Map.of())),
                 invalid,
                 PolicyGate.allowAll(),
@@ -81,7 +81,7 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-invalid");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -95,7 +95,7 @@ class ActionRunLifecycleTest {
     void storesPolicyDenyAsDeniedRun() {
         InMemoryRunStore runStore = new InMemoryRunStore();
         DefaultActionRuntime runtime = runtime(
-                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                         ActionExecutionResult.succeeded(Map.of())),
                 null,
                 PolicyGate.denyAll("blocked"),
@@ -103,7 +103,7 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-policy-deny");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -118,7 +118,7 @@ class ActionRunLifecycleTest {
     void storesAiPlannerWriteAsWaitingApprovalRun() {
         InMemoryRunStore runStore = new InMemoryRunStore();
         DefaultActionRuntime runtime = runtime(
-                registryOf(writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                registryOf(writeAction("UpdateReport", Set.of(ActionProposerType.AI_PLANNER)),
                         ActionExecutionResult.succeeded(Map.of())),
                 null,
                 null,
@@ -126,8 +126,8 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-approval");
 
         ActionExecutionResult result = runtime.handle(
-                new ActionProposal("proposal-approval", "UpdateReport", ActionOrigin.AI_PLANNER,
-                        "planner", "update", 0.9d, Map.of(), null, Map.of()),
+                new ActionProposal("proposal-approval", "UpdateReport", ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER, "planner", "update", 0.9d, Map.of(), null, Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -144,7 +144,7 @@ class ActionRunLifecycleTest {
     void capturesProposalRationaleAndRestoresItOnResume() {
         InMemoryRunStore runStore = new InMemoryRunStore();
         ProposalCapturingExecutor executor = new ProposalCapturingExecutor(
-                writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                writeAction("UpdateReport", Set.of(ActionProposerType.AI_PLANNER)),
                 ActionExecutionResult.succeeded(Map.of("updated", true)));
         DefaultActionRuntime runtime = runtime(
                 new InMemoryActionRegistry(List.of(executor)),
@@ -160,7 +160,8 @@ class ActionRunLifecycleTest {
         ActionProposal proposal = new ActionProposal(
                 "proposal-rationale",
                 "UpdateReport",
-                ActionOrigin.AI_PLANNER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.AI_PLANNER,
                 "planner",
                 "source-backed document issue",
                 0.72d,
@@ -195,14 +196,14 @@ class ActionRunLifecycleTest {
         InMemoryRunStore runStore = new InMemoryRunStore();
         DefaultActionRuntime runtime = runtime(
                 new InMemoryActionRegistry(List.of(
-                        new ThrowingExecutor(writeAction("CreateReport", Set.of(ActionOrigin.USER)), "boom"))),
+                        new ThrowingExecutor(writeAction("CreateReport", Set.of(ActionProposerType.USER)), "boom"))),
                 null,
                 PolicyGate.allowAll(),
                 runStore);
         ExecutionContext context = context("run-executor-failed");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -220,7 +221,7 @@ class ActionRunLifecycleTest {
             throw new RuntimeException("validator boom");
         };
         DefaultActionRuntime runtime = runtime(
-                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                         ActionExecutionResult.succeeded(Map.of())),
                 throwingValidator,
                 PolicyGate.allowAll(),
@@ -228,7 +229,7 @@ class ActionRunLifecycleTest {
         ExecutionContext context = context("run-runtime-failed");
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of(), "user-1"),
+                userProposal("CreateReport", Map.of()),
                 context);
 
         ActionRun run = stored(runStore, context);
@@ -266,26 +267,33 @@ class ActionRunLifecycleTest {
         return new InMemoryActionRegistry(List.of(new StubExecutor(definition, result)));
     }
 
-    private static ActionDefinition writeAction(String actionId, Set<ActionOrigin> allowedOrigins) {
+    private static ActionDefinition writeAction(String actionId, Set<ActionProposerType> allowedProposerTypes) {
         return new ActionDefinition(actionId, actionId, "", ActionEffect.WRITE, ActionRiskLevel.MEDIUM,
-                allowedOrigins, Set.of(), false, false, true, "", "", Map.of());
+                Set.of(ActionRequestChannel.COMMAND), allowedProposerTypes, Set.of(),
+                false, false, true, "", "", Map.of());
     }
 
-    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result) implements ActionExecutor {
+    private static ActionProposal userProposal(String actionId, Map<String, Object> input) {
+        return ActionProposal.userFrom(ActionRequestChannel.COMMAND, actionId, input, "user-1");
+    }
+
+    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result)
+            implements SynchronousActionExecutor {
         @Override
         public ActionExecutionResult execute(ActionExecutionContext context) {
             return result;
         }
     }
 
-    private record ThrowingExecutor(ActionDefinition definition, String message) implements ActionExecutor {
+    private record ThrowingExecutor(ActionDefinition definition, String message)
+            implements SynchronousActionExecutor {
         @Override
         public ActionExecutionResult execute(ActionExecutionContext context) {
             throw new RuntimeException(message);
         }
     }
 
-    private static final class ProposalCapturingExecutor implements ActionExecutor {
+    private static final class ProposalCapturingExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult result;
         private ActionProposal proposal;

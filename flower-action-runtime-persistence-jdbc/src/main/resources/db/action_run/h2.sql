@@ -8,7 +8,6 @@ CREATE TABLE action_run (
     action_id VARCHAR(255) NOT NULL,
     proposal_id VARCHAR(128) NOT NULL,
     requester_id VARCHAR(128) NOT NULL,
-    origin VARCHAR(32) NOT NULL,
     request_channel VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
     proposer_type VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
     proposal_reason VARCHAR(2048) NOT NULL DEFAULT '',

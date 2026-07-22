@@ -22,7 +22,7 @@ class RunStoreConcurrencyTest {
     void inMemoryCompareAndSetAllowsExactlyOneConcurrentWriter() throws Exception {
         InMemoryRunStore store = new InMemoryRunStore();
         ActionRun original = ActionRun.requested(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                proposal(),
                 new ExecutionContext("tenant-1", "user-1", "run-cas", "trace-cas", Map.of()));
         store.create(original);
         int writerCount = 16;
@@ -64,7 +64,7 @@ class RunStoreConcurrencyTest {
     void inMemoryCreateNeverOverwritesExistingRun() {
         InMemoryRunStore store = new InMemoryRunStore();
         ActionRun original = ActionRun.requested(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                proposal(),
                 new ExecutionContext("tenant-1", "user-1", "run-create-once", "trace-1", Map.of()));
         ActionRun replacement = original.toBuilder()
                 .status(ActionRunStatus.CANCELLED)
@@ -81,7 +81,7 @@ class RunStoreConcurrencyTest {
     void inMemoryCompareAndSetRejectsInvalidTransitionShape() {
         InMemoryRunStore store = new InMemoryRunStore();
         ActionRun original = ActionRun.requested(
-                ActionProposal.user("maintenance.run", Map.of(), "user-1"),
+                proposal(),
                 new ExecutionContext("tenant-1", "user-1", "run-invalid-cas", "trace-cas", Map.of()));
         store.create(original);
 
@@ -95,5 +95,13 @@ class RunStoreConcurrencyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("run ids must match");
         assertThat(store.find(original.runId())).contains(original);
+    }
+
+    private static ActionProposal proposal() {
+        return ActionProposal.userFrom(
+                ActionRequestChannel.COMMAND,
+                "maintenance.run",
+                Map.of(),
+                "user-1");
     }
 }

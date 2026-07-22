@@ -36,10 +36,11 @@ import java.util.concurrent.CompletionException;
  *
  * <pre>
  * record-proposal
- * -&gt; reserve-duplicate
  * -&gt; resolve-action
  * -&gt; validate-input
  * -&gt; evaluate-policy
+ * -&gt; reserve-duplicate
+ * -&gt; request-approval
  * -&gt; pre-execution-check
  * -&gt; execute-action
  * -&gt; record-result  (finalize, always runs)
@@ -62,10 +63,11 @@ public final class ActionPipeline {
     public static List<NamedStage> gates() {
         return List.of(
                 new NamedStage("record-proposal", ActionPipeline::recordProposal),
-                new NamedStage("reserve-duplicate", ActionPipeline::reserveDuplicate),
                 new NamedStage("resolve-action", ActionPipeline::resolveAction),
                 new NamedStage("validate-input", ActionPipeline::validateInput),
                 new NamedStage("evaluate-policy", ActionPipeline::evaluatePolicy),
+                new NamedStage("reserve-duplicate", ActionPipeline::reserveDuplicate),
+                new NamedStage("request-approval", ActionPipeline::requestApproval),
                 new NamedStage("pre-execution-check", ActionPipeline::preExecutionCheck),
                 new NamedStage("execute-action", ActionPipeline::executeAction));
     }
@@ -225,7 +227,6 @@ public final class ActionPipeline {
     static StageOutcome recordProposal(ActionExecutionSession session) {
         session.beginRun("record-proposal");
         session.record(AuditEventType.ACTION_PROPOSED, Map.of(
-                "origin", session.proposal().origin().name(),
                 "requestChannel", session.proposal().requestChannel().name(),
                 "proposerType", session.proposal().proposerType().name(),
                 "proposerId", session.proposal().requesterId(),
@@ -311,23 +312,7 @@ public final class ActionPipeline {
                 .policyReason(decision.reason())
                 .build());
         session.record(AuditEventType.POLICY_EVALUATED, Map.of("type", decision.type().name()));
-        if (decision.requiresApproval()) {
-            ApprovalRequest approval = session.approvalGate()
-                    .requestApproval(session.proposal(), session.definition(), session.context(), decision);
-            session.result(ActionExecutionResult.pendingApproval(
-                    decision.reason(),
-                    Map.of(
-                            "approvalId", approval.approvalId(),
-                            "runId", session.run().runId())));
-            session.updateRun(run -> run.toBuilder()
-                    .status(ActionRunStatus.WAITING_APPROVAL)
-                    .approvalId(approval.approvalId())
-                    .result(session.result())
-                    .build());
-            session.record(AuditEventType.APPROVAL_REQUESTED, Map.of("approvalId", approval.approvalId()));
-            return StageOutcome.SHORT_CIRCUIT;
-        }
-        if (!decision.allowedToExecuteNow()) {
+        if (!decision.allowedToExecuteNow() && !decision.requiresApproval()) {
             ActionExecutionResult result = ActionExecutionResult.denied("POLICY_DENIED", decision.reason());
             session.result(result);
             session.updateRun(run -> run.toBuilder()
@@ -339,6 +324,28 @@ public final class ActionPipeline {
             return StageOutcome.SHORT_CIRCUIT;
         }
         return StageOutcome.CONTINUE;
+    }
+
+    static StageOutcome requestApproval(ActionExecutionSession session) {
+        session.enterStage("request-approval");
+        PolicyDecision decision = session.policyDecision();
+        if (!decision.requiresApproval()) {
+            return StageOutcome.CONTINUE;
+        }
+        ApprovalRequest approval = session.approvalGate()
+                .requestApproval(session.proposal(), session.definition(), session.context(), decision);
+        session.result(ActionExecutionResult.pendingApproval(
+                decision.reason(),
+                Map.of(
+                        "approvalId", approval.approvalId(),
+                        "runId", session.run().runId())));
+        session.updateRun(run -> run.toBuilder()
+                .status(ActionRunStatus.WAITING_APPROVAL)
+                .approvalId(approval.approvalId())
+                .result(session.result())
+                .build());
+        session.record(AuditEventType.APPROVAL_REQUESTED, Map.of("approvalId", approval.approvalId()));
+        return StageOutcome.SHORT_CIRCUIT;
     }
 
     static StageOutcome reevaluatePolicyAfterApproval(ActionExecutionSession session) {
@@ -451,7 +458,7 @@ public final class ActionPipeline {
         if ((session.executor() instanceof AsyncActionExecutor
                 || session.executor() instanceof DeferredActionExecutor)
                 && !session.runStore().supportsResumableRuns()) {
-            ActionExecutionResult result = ActionExecutionResult.failed(
+            ActionExecutionResult result = ActionExecutionResult.correctableFailure(
                     "RUN_STORE_REQUIRED_FOR_DEFERRED_EXECUTION",
                     "Deferred and asynchronous actions require a queryable RunStore.");
             return completeExecution(session, result);
@@ -634,7 +641,8 @@ public final class ActionPipeline {
         if (session.duplicateDecision() != null
                 && session.duplicateDecision().type() == DuplicateActionDecisionType.ACCEPT) {
             if (session.result().terminal()) {
-                session.duplicateActionPolicy().complete(session.proposal(), session.result());
+                session.duplicateActionPolicy().complete(
+                        session.proposal(), session.context(), session.result());
             }
         }
         ActionRun current = session.run();
@@ -733,7 +741,7 @@ public final class ActionPipeline {
             return;
         }
         try {
-            session.duplicateActionPolicy().release(session.proposal(), cause);
+            session.duplicateActionPolicy().release(session.proposal(), session.context(), cause);
         } catch (Throwable releaseFailure) {
             suppress(cause, releaseFailure);
         }

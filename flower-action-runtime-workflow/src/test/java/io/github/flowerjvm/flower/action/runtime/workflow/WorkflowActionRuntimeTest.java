@@ -5,11 +5,12 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionDispatch;
 import io.github.flowerjvm.flower.action.runtime.action.DeferredActionExecutor;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEvent;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
@@ -32,7 +33,8 @@ class WorkflowActionRuntimeTest {
     @Test
     void executesRegisteredActionThroughFlowerFlow() {
         RecordingAuditSink audit = new RecordingAuditSink();
-        ActionDefinition definition = definition("CreateReport", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition(
+                "CreateReport", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         WorkflowActionRuntime runtime = new WorkflowActionRuntime(
                 new InMemoryActionRegistry(List.of(new StubExecutor(
                         definition,
@@ -48,7 +50,7 @@ class WorkflowActionRuntimeTest {
                 32);
 
         ActionExecutionResult result = runtime.handle(
-                ActionProposal.user("CreateReport", Map.of("siteId", 1), "user-1"),
+                userProposal("CreateReport", Map.of("siteId", 1)),
                 ExecutionContext.of("tenant-1", "user-1"));
 
         assertThat(result.status()).isEqualTo(ActionExecutionStatus.SUCCEEDED);
@@ -64,7 +66,8 @@ class WorkflowActionRuntimeTest {
 
     @Test
     void aiPlannerWriteActionStopsAtApprovalBoundary() {
-        ActionDefinition definition = definition("UpdateReport", ActionEffect.WRITE, Set.of(ActionOrigin.AI_PLANNER));
+        ActionDefinition definition = definition(
+                "UpdateReport", ActionEffect.WRITE, Set.of(ActionProposerType.AI_PLANNER));
         WorkflowActionRuntime runtime = new WorkflowActionRuntime(new InMemoryActionRegistry(List.of(new StubExecutor(
                 definition,
                 ActionExecutionResult.succeeded(Map.of())))));
@@ -73,7 +76,8 @@ class WorkflowActionRuntimeTest {
                 new ActionProposal(
                         "proposal-1",
                         "UpdateReport",
-                        ActionOrigin.AI_PLANNER,
+                        ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER,
                         "planner",
                         "update report",
                         0.9d,
@@ -89,7 +93,8 @@ class WorkflowActionRuntimeTest {
     @Test
     void deferredActionCanCompleteAfterObservableFlowFinishes() {
         InMemoryRunStore runStore = new InMemoryRunStore();
-        ActionDefinition definition = definition("Maintenance", ActionEffect.WRITE, Set.of(ActionOrigin.USER));
+        ActionDefinition definition = definition(
+                "Maintenance", ActionEffect.WRITE, Set.of(ActionProposerType.USER));
         DeferredActionExecutor executor = new DeferredActionExecutor() {
             @Override
             public ActionDefinition definition() {
@@ -117,7 +122,7 @@ class WorkflowActionRuntimeTest {
                 "tenant-1", "user-1", "run-workflow-deferred", "trace-workflow-deferred", Map.of());
 
         ActionExecutionResult accepted = runtime.handle(
-                ActionProposal.user("Maintenance", Map.of(), "user-1"),
+                userProposal("Maintenance", Map.of()),
                 context);
         var waiting = runStore.find(context.runId()).orElseThrow();
         ActionExecutionResult completed = runtime.complete(
@@ -133,14 +138,15 @@ class WorkflowActionRuntimeTest {
     private static ActionDefinition definition(
             String actionId,
             ActionEffect effect,
-            Set<ActionOrigin> allowedOrigins) {
+            Set<ActionProposerType> allowedProposerTypes) {
         return new ActionDefinition(
                 actionId,
                 actionId,
                 "",
                 effect,
                 ActionRiskLevel.MEDIUM,
-                allowedOrigins,
+                Set.of(ActionRequestChannel.COMMAND),
+                allowedProposerTypes,
                 Set.of(),
                 false,
                 false,
@@ -150,7 +156,12 @@ class WorkflowActionRuntimeTest {
                 Map.of());
     }
 
-    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result) implements ActionExecutor {
+    private static ActionProposal userProposal(String actionId, Map<String, Object> input) {
+        return ActionProposal.userFrom(ActionRequestChannel.COMMAND, actionId, input, "user-1");
+    }
+
+    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result)
+            implements SynchronousActionExecutor {
         @Override
         public ActionExecutionResult execute(ActionExecutionContext context) {
             return result;

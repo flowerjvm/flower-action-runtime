@@ -16,7 +16,7 @@ public interface AsyncActionExecutor extends ActionExecutor {
     CompletionStage<ActionExecutionResult> executeAsync(ActionExecutionContext context);
 
     default String operationId(ActionExecutionContext context) {
-        return context.executionContext().runId() + ":" + context.attemptToken();
+        return context.deterministicOperationId();
     }
 
     default Instant dueAt(ActionExecutionContext context) {
@@ -45,8 +45,4 @@ public interface AsyncActionExecutor extends ActionExecutor {
                 operationMetadata(context));
     }
 
-    @Override
-    default ActionExecutionResult execute(ActionExecutionContext context) {
-        throw new UnsupportedOperationException("Async actions must be invoked through dispatch");
-    }
 }

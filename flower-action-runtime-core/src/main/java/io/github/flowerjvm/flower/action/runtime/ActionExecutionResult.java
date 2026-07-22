@@ -15,7 +15,7 @@ public record ActionExecutionResult(
         code = normalizeCode(code, status);
         message = message == null ? "" : message.trim();
         output = output == null ? Map.of() : Map.copyOf(output);
-        retryDisposition = Objects.requireNonNullElse(retryDisposition, RetryDisposition.NEVER);
+        retryDisposition = Objects.requireNonNullElse(retryDisposition, defaultRetryDisposition(status));
     }
 
     /**
@@ -37,17 +37,46 @@ public record ActionExecutionResult(
                 RetryDisposition.NEVER);
     }
 
+    /**
+     * Creates a failure whose retry safety is unknown.
+     *
+     * <p>Unknown failures require manual review because the runtime cannot know whether an executor already produced
+     * an external side effect. Prefer one of the explicit failure factories when the host knows the retry policy.</p>
+     */
     public static ActionExecutionResult failed(String message) {
         return failed("ACTION_FAILED", message);
     }
 
     public static ActionExecutionResult failed(String code, String message) {
+        return failed(code, message, RetryDisposition.MANUAL_REVIEW);
+    }
+
+    public static ActionExecutionResult failed(
+            String code,
+            String message,
+            RetryDisposition retryDisposition) {
         return new ActionExecutionResult(
                 ActionExecutionStatus.FAILED,
                 code,
                 message,
                 Map.of(),
-                RetryDisposition.AFTER_BACKOFF);
+                retryDisposition);
+    }
+
+    public static ActionExecutionResult retryableFailure(String code, String message) {
+        return failed(code, message, RetryDisposition.AFTER_BACKOFF);
+    }
+
+    public static ActionExecutionResult correctableFailure(String code, String message) {
+        return failed(code, message, RetryDisposition.AFTER_CORRECTION);
+    }
+
+    public static ActionExecutionResult permanentFailure(String code, String message) {
+        return failed(code, message, RetryDisposition.NEVER);
+    }
+
+    public static ActionExecutionResult manualReviewFailure(String code, String message) {
+        return failed(code, message, RetryDisposition.MANUAL_REVIEW);
     }
 
     public static ActionExecutionResult denied(String message) {
@@ -147,7 +176,7 @@ public record ActionExecutionResult(
     private static RetryDisposition defaultRetryDisposition(ActionExecutionStatus status) {
         ActionExecutionStatus safeStatus = Objects.requireNonNullElse(status, ActionExecutionStatus.FAILED);
         return switch (safeStatus) {
-            case FAILED -> RetryDisposition.AFTER_BACKOFF;
+            case FAILED -> RetryDisposition.MANUAL_REVIEW;
             case VALIDATION_FAILED -> RetryDisposition.AFTER_CORRECTION;
             case PENDING_APPROVAL -> RetryDisposition.AFTER_APPROVAL;
             case SUCCEEDED, DENIED, ACCEPTED, CANCELLED -> RetryDisposition.NEVER;

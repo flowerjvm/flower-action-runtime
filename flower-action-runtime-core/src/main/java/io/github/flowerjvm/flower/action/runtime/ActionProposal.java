@@ -7,6 +7,10 @@ import java.util.UUID;
 /**
  * Proposed business action and its loose input payload.
  *
+ * <p>The request channel identifies where the request entered, while proposer type identifies what kind of actor
+ * suggested it. Neither grants authority: policy must use the trusted execution principal and tenant from
+ * {@link ExecutionContext}.</p>
+ *
  * <p>The {@code input} and {@code metadata} maps are intentional MVP flexibility. Core stays free of JSON and typed
  * schema frameworks; use {@code ActionInputValidator} for validation. A typed action adapter can later translate
  * typed request objects to and from these maps at a module boundary.</p>
@@ -14,15 +18,14 @@ import java.util.UUID;
 public record ActionProposal(
         String proposalId,
         String actionId,
-        ActionOrigin origin,
+        ActionRequestChannel requestChannel,
+        ActionProposerType proposerType,
         String requesterId,
         String reason,
         double confidence,
         Map<String, Object> input,
         String idempotencyKey,
-        Map<String, Object> metadata,
-        ActionRequestChannel requestChannel,
-        ActionProposerType proposerType) {
+        Map<String, Object> metadata) {
 
     public ActionProposal {
         proposalId = proposalId == null || proposalId.isBlank()
@@ -32,50 +35,40 @@ public record ActionProposal(
             throw new IllegalArgumentException("actionId must not be blank");
         }
         actionId = actionId.trim();
-        origin = Objects.requireNonNullElse(origin, ActionOrigin.UNKNOWN);
+        requestChannel = Objects.requireNonNullElse(requestChannel, ActionRequestChannel.UNKNOWN);
+        proposerType = Objects.requireNonNullElse(proposerType, ActionProposerType.UNKNOWN);
         requesterId = requesterId == null ? "" : requesterId.trim();
         reason = reason == null ? "" : reason.trim();
-        if (confidence < 0.0d || confidence > 1.0d) {
-            throw new IllegalArgumentException("confidence must be between 0.0 and 1.0");
+        if (!Double.isFinite(confidence) || confidence < 0.0d || confidence > 1.0d) {
+            throw new IllegalArgumentException("confidence must be a finite value between 0.0 and 1.0");
         }
         input = input == null ? Map.of() : Map.copyOf(input);
         idempotencyKey = idempotencyKey == null || idempotencyKey.isBlank()
                 ? proposalId
                 : idempotencyKey.trim();
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-        requestChannel = Objects.requireNonNullElse(requestChannel, channelFromOrigin(origin));
-        proposerType = Objects.requireNonNullElse(proposerType, proposerFromOrigin(origin));
     }
 
-    /**
-     * Compatibility constructor for the 0.1.x proposal shape.
-     */
-    public ActionProposal(
-            String proposalId,
-            String actionId,
-            ActionOrigin origin,
-            String requesterId,
-            String reason,
-            double confidence,
-            Map<String, Object> input,
-            String idempotencyKey,
-            Map<String, Object> metadata) {
-        this(
-                proposalId,
-                actionId,
-                origin,
-                requesterId,
-                reason,
-                confidence,
-                input,
-                idempotencyKey,
-                metadata,
-                null,
-                null);
+    public static Builder builder() {
+        return new Builder();
     }
 
-    public static ActionProposal user(String actionId, Map<String, Object> input, String requesterId) {
-        return new ActionProposal(null, actionId, ActionOrigin.USER, requesterId, "", 1.0d, input, null, Map.of());
+    public static Builder builder(String actionId) {
+        return new Builder().actionId(actionId);
+    }
+
+    public Builder toBuilder() {
+        return new Builder()
+                .proposalId(proposalId)
+                .actionId(actionId)
+                .requestChannel(requestChannel)
+                .proposerType(proposerType)
+                .requesterId(requesterId)
+                .reason(reason)
+                .confidence(confidence)
+                .input(input)
+                .idempotencyKey(idempotencyKey)
+                .metadata(metadata);
     }
 
     public static ActionProposal userFrom(
@@ -83,37 +76,91 @@ public record ActionProposal(
             String actionId,
             Map<String, Object> input,
             String requesterId) {
-        return new ActionProposal(
-                null,
-                actionId,
-                ActionOrigin.USER,
-                requesterId,
-                "",
-                1.0d,
-                input,
-                null,
-                Map.of(),
-                requestChannel,
-                ActionProposerType.USER);
+        return builder(actionId)
+                .requestChannel(requestChannel)
+                .proposerType(ActionProposerType.USER)
+                .requesterId(requesterId)
+                .input(input)
+                .build();
     }
 
-    private static ActionRequestChannel channelFromOrigin(ActionOrigin origin) {
-        return switch (origin) {
-            case UI -> ActionRequestChannel.UI;
-            case API -> ActionRequestChannel.API;
-            case MCP -> ActionRequestChannel.MCP;
-            case SCHEDULED_JOB -> ActionRequestChannel.SCHEDULER;
-            case SYSTEM, AI_PLANNER -> ActionRequestChannel.INTERNAL;
-            case USER, UNKNOWN -> ActionRequestChannel.UNKNOWN;
-        };
-    }
+    public static final class Builder {
+        private String proposalId;
+        private String actionId;
+        private ActionRequestChannel requestChannel;
+        private ActionProposerType proposerType;
+        private String requesterId;
+        private String reason;
+        private double confidence = 1.0d;
+        private Map<String, Object> input;
+        private String idempotencyKey;
+        private Map<String, Object> metadata;
 
-    private static ActionProposerType proposerFromOrigin(ActionOrigin origin) {
-        return switch (origin) {
-            case USER, UI -> ActionProposerType.USER;
-            case AI_PLANNER -> ActionProposerType.AI_PLANNER;
-            case SYSTEM, SCHEDULED_JOB -> ActionProposerType.SYSTEM;
-            case API, MCP, UNKNOWN -> ActionProposerType.UNKNOWN;
-        };
+        private Builder() {
+        }
+
+        public Builder proposalId(String proposalId) {
+            this.proposalId = proposalId;
+            return this;
+        }
+
+        public Builder actionId(String actionId) {
+            this.actionId = actionId;
+            return this;
+        }
+
+        public Builder requestChannel(ActionRequestChannel requestChannel) {
+            this.requestChannel = requestChannel;
+            return this;
+        }
+
+        public Builder proposerType(ActionProposerType proposerType) {
+            this.proposerType = proposerType;
+            return this;
+        }
+
+        public Builder requesterId(String requesterId) {
+            this.requesterId = requesterId;
+            return this;
+        }
+
+        public Builder reason(String reason) {
+            this.reason = reason;
+            return this;
+        }
+
+        public Builder confidence(double confidence) {
+            this.confidence = confidence;
+            return this;
+        }
+
+        public Builder input(Map<String, Object> input) {
+            this.input = input;
+            return this;
+        }
+
+        public Builder idempotencyKey(String idempotencyKey) {
+            this.idempotencyKey = idempotencyKey;
+            return this;
+        }
+
+        public Builder metadata(Map<String, Object> metadata) {
+            this.metadata = metadata;
+            return this;
+        }
+
+        public ActionProposal build() {
+            return new ActionProposal(
+                    proposalId,
+                    actionId,
+                    requestChannel,
+                    proposerType,
+                    requesterId,
+                    reason,
+                    confidence,
+                    input,
+                    idempotencyKey,
+                    metadata);
+        }
     }
 }

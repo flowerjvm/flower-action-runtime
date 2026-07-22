@@ -54,7 +54,6 @@ ActionRun
   actionId       which registered action
   proposalId     originating proposal
   requesterId    who/what proposed (user, planner, system, MCP, scheduler)
-  origin         legacy ActionOrigin compatibility value
   requestChannel UI/API/CLI/MCP/scheduler/etc. entry point
   proposerType   user/AI planner/system/service proposer kind
   input          proposal input (Map; serialized by the store)
@@ -76,6 +75,14 @@ ActionRun
 serializable data. Core stays JSON-free: it holds typed fields and
 `Map<String,Object>`; a JDBC `RunStore` implementation does the serialization.
 
+The 0.3 pipeline resolves the action and evaluates validation and policy before
+reserving a duplicate key. `RETURN_EXISTING` is therefore available only after
+the current request passes governance. The duplicate policy must still scope a
+reservation by at least `tenantId + actionId + idempotencyKey`; add principal or
+resource-visibility scope when results are not safely shareable across all
+authorized actors in the tenant. The same trusted context is supplied to
+`reserve`, `complete`, and `release`.
+
 ### Persisted vs re-injected on resume
 
 A durable backend must be able to rebuild a run after restart. Split the current
@@ -84,7 +91,7 @@ session accordingly:
 ```text
 Persisted in ActionRun (the durable spine):
   runId, version, ids, context metadata, actionId, proposalId, requester,
-  origin, requestChannel, proposerType, input,
+  requestChannel, proposerType, input,
   duplicateKey, status, currentStage, policyDecision summary,
   approvalId, dueAt, attemptToken, external operation data, result,
   failureReason, timestamps
@@ -168,13 +175,15 @@ Denied early (unregistered / invalid / policy deny / duplicate reject):
 
 ```text
 REQUESTED -> VALIDATING -> DENIED
-REQUESTED -> DENIED                (duplicate REJECT at reserve-duplicate)
+REQUESTED -> VALIDATING -> POLICY_EVALUATED -> DENIED
+                                            (duplicate REJECT at reserve-duplicate)
 ```
 
 Duplicate return-existing:
 
 ```text
-REQUESTED -> (RETURN_EXISTING) -> terminal, result mirrors the existing run
+REQUESTED -> VALIDATING -> POLICY_EVALUATED
+          -> (RETURN_EXISTING) -> terminal, result mirrors the existing run
 ```
 
 Executor failure:
@@ -238,10 +247,11 @@ Mapped onto the current `ActionPipeline` stages. "persist" = a `RunStore` write.
 |---|---|
 | (on receipt) | `create` run: status=REQUESTED, currentStage=record-proposal, ids/input/dueAt set — **persist** |
 | record-proposal | (run already created here) |
-| reserve-duplicate | set duplicateKey. ACCEPT: continue. RETURN_EXISTING: terminal, result mirrors existing — **persist**. REJECT: status=DENIED, failureReason="duplicate running" — **persist** |
 | resolve-action | currentStage=resolve-action; status=VALIDATING. Unregistered: status=DENIED — **persist** |
 | validate-input | currentStage=validate-input. Invalid: status=DENIED, failureReason=violations — **persist** |
-| evaluate-policy | store policyDecision. Approval: status=WAITING_APPROVAL, approvalId, dueAt, result output with runId + approvalId — **persist**. Deny: status=DENIED — **persist**. Allow: status=POLICY_EVALUATED |
+| evaluate-policy | store policyDecision. Deny: status=DENIED — **persist**. Allow/require approval: status=POLICY_EVALUATED |
+| reserve-duplicate | set duplicateKey. ACCEPT: continue. RETURN_EXISTING: terminal, result mirrors existing — **persist**. REJECT: status=DENIED, failureReason="duplicate running" — **persist** |
+| request-approval | if required: status=WAITING_APPROVAL, approvalId, dueAt, result output with runId + approvalId — **persist** |
 | execute-action | status=RUNNING, write attemptToken — **persist (before side effect)**. Success: result, status=SUCCEEDED. Failure: failureReason, status=FAILED |
 | record-result (finalize) | duplicate complete/release; ensure terminal status + updatedAt — **persist** |
 | failRuntime | if not terminal: status=RUNTIME_FAILED, failureReason — **persist (best-effort)** |

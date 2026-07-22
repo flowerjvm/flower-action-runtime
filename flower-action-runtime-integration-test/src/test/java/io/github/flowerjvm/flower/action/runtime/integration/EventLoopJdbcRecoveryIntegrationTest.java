@@ -2,15 +2,16 @@ package io.github.flowerjvm.flower.action.runtime.integration;
 
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.ExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
 import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalDecision;
 import io.github.flowerjvm.flower.action.runtime.duplicate.InMemoryDuplicateActionPolicy;
 import io.github.flowerjvm.flower.action.runtime.eventloop.EventLoopActionRuntime;
@@ -50,8 +51,17 @@ class EventLoopJdbcRecoveryIntegrationTest {
                 "trace-integrated-recovery", Map.of());
 
         ActionExecutionResult parked = firstRuntime.handle(
-                new ActionProposal("proposal-integrated-recovery", "UpdateReport", ActionOrigin.AI_PLANNER,
-                        "planner", "update report", 0.9d, Map.of("siteId", 1), null, Map.of()),
+                new ActionProposal(
+                        "proposal-integrated-recovery",
+                        "UpdateReport",
+                        ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER,
+                        "planner",
+                        "update report",
+                        0.9d,
+                        Map.of("siteId", 1),
+                        null,
+                        Map.of()),
                 context);
         ActionRun waiting = firstStore.find(context.runId()).orElseThrow();
 
@@ -107,7 +117,8 @@ class EventLoopJdbcRecoveryIntegrationTest {
     private static CountingExecutor updateReportExecutor() {
         return new CountingExecutor(
                 new ActionDefinition("UpdateReport", "UpdateReport", "", ActionEffect.WRITE, ActionRiskLevel.MEDIUM,
-                        Set.of(ActionOrigin.AI_PLANNER), Set.of(), false, false, true, "", "", Map.of()),
+                        Set.of(ActionRequestChannel.COMMAND), Set.of(ActionProposerType.AI_PLANNER), Set.of(),
+                        false, false, true, "", "", Map.of()),
                 ActionExecutionResult.succeeded(Map.of("updated", true)));
     }
 
@@ -138,7 +149,7 @@ class EventLoopJdbcRecoveryIntegrationTest {
         }
     }
 
-    private static final class CountingExecutor implements ActionExecutor {
+    private static final class CountingExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult result;
         private final AtomicInteger calls = new AtomicInteger();

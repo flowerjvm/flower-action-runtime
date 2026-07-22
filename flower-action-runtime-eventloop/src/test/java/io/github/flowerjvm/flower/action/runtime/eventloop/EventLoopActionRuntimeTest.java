@@ -6,10 +6,11 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.validation.ActionInputValidator;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRun;
 import io.github.flowerjvm.flower.action.runtime.run.ActionRunStatus;
@@ -226,7 +227,8 @@ class EventLoopActionRuntimeTest {
         return new ActionProposal(
                 proposalId,
                 actionId,
-                ActionOrigin.AI_PLANNER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.AI_PLANNER,
                 "planner",
                 "update",
                 0.9d,
@@ -241,7 +243,8 @@ class EventLoopActionRuntimeTest {
 
     private static ActionDefinition writeAction(String actionId) {
         return new ActionDefinition(actionId, actionId, "", ActionEffect.WRITE, ActionRiskLevel.MEDIUM,
-                Set.of(ActionOrigin.AI_PLANNER), Set.of(), false, false, true, "", "", Map.of());
+                Set.of(ActionRequestChannel.COMMAND), Set.of(ActionProposerType.AI_PLANNER), Set.of(),
+                false, false, true, "", "", Map.of());
     }
 
     private record Fixture(
@@ -252,7 +255,7 @@ class EventLoopActionRuntimeTest {
             RecordingAuditSink audit) {
     }
 
-    private static final class CountingExecutor implements ActionExecutor {
+    private static final class CountingExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult result;
         private final AtomicInteger calls = new AtomicInteger();

@@ -35,4 +35,14 @@ public record ActionExecutionContext(
             Map<String, Object> input) {
         this(executionContext, proposal, definition, input, "");
     }
+
+    /**
+     * Builds a deterministic external-operation key for the current Run attempt.
+     *
+     * <p>Hosts may use this value as an idempotency key when dispatching deferred work. It is correlation data, not
+     * callback authentication.</p>
+     */
+    public String deterministicOperationId() {
+        return executionContext.runId() + ":" + attemptToken;
+    }
 }

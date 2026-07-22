@@ -6,8 +6,7 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionDefinition;
 import io.github.flowerjvm.flower.action.runtime.action.ActionEffect;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionStatus;
-import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
@@ -91,6 +90,25 @@ class JdbcRunStoreTest {
     }
 
     @Test
+    void h2MigrationFrom02DropsLegacyOriginColumn() throws SQLException {
+        JdbcDataSource dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        dataSource.setUser("sa");
+        dataSource.setPassword("");
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE action_run (run_id VARCHAR(64) PRIMARY KEY, origin VARCHAR(32))");
+        }
+
+        applyResource(dataSource, "db/action_run/migration/h2-0.2-to-0.3.sql");
+
+        try (Connection connection = dataSource.getConnection();
+             var columns = connection.getMetaData().getColumns(null, null, "ACTION_RUN", "ORIGIN")) {
+            assertThat(columns.next()).isFalse();
+        }
+    }
+
+    @Test
     void findResumableReturnsOnlyNonTerminalRunsForTenant() {
         JdbcRunStore store = store();
         ActionRun waiting = fullRun("run-waiting")
@@ -124,13 +142,13 @@ class JdbcRunStoreTest {
     void defaultRuntimePersistsFinalAndApprovalRuns() {
         JdbcRunStore store = store();
         DefaultActionRuntime successRuntime = runtime(
-                registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+                registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                         ActionExecutionResult.succeeded(Map.of("reportId", 10))),
                 store);
         ExecutionContext successContext = context("run-jdbc-success");
 
         ActionExecutionResult success = successRuntime.handle(
-                ActionProposal.user("CreateReport", Map.of("siteId", 1), "user-1"),
+                userProposal("CreateReport", Map.of("siteId", 1)),
                 successContext);
 
         ActionRun successRun = store.find(successContext.runId()).orElseThrow();
@@ -139,14 +157,15 @@ class JdbcRunStoreTest {
         assertThat(successRun.result()).isEqualTo(success);
 
         DefaultActionRuntime approvalRuntime = runtime(
-                registryOf(writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                registryOf(writeAction("UpdateReport", Set.of(ActionProposerType.AI_PLANNER)),
                         ActionExecutionResult.succeeded(Map.of())),
                 store);
         ExecutionContext approvalContext = context("run-jdbc-approval");
 
         approvalRuntime.handle(
-                new ActionProposal("proposal-approval", "UpdateReport", ActionOrigin.AI_PLANNER,
-                        "planner", "update", 0.9d, Map.of(), null, Map.of()),
+                new ActionProposal("proposal-approval", "UpdateReport", ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER, "planner", "update", 0.9d,
+                        Map.of(), null, Map.of()),
                 approvalContext);
 
         ActionRun approvalRun = store.find(approvalContext.runId()).orElseThrow();
@@ -177,14 +196,15 @@ class JdbcRunStoreTest {
         DataSource dataSource = dataSource();
         JdbcRunStore firstStore = JdbcRunStore.create(dataSource);
         CountingExecutor firstExecutor = new CountingExecutor(
-                writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                writeAction("UpdateReport", Set.of(ActionProposerType.AI_PLANNER)),
                 ActionExecutionResult.succeeded(Map.of("updated", true)));
         DefaultActionRuntime firstRuntime = runtime(new InMemoryActionRegistry(List.of(firstExecutor)), firstStore);
         ExecutionContext context = context("run-jdbc-resume");
 
         ActionExecutionResult parked = firstRuntime.handle(
-                new ActionProposal("proposal-jdbc-resume", "UpdateReport", ActionOrigin.AI_PLANNER,
-                        "planner", "update", 0.9d, Map.of("siteId", 1), null, Map.of()),
+                new ActionProposal("proposal-jdbc-resume", "UpdateReport", ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER, "planner", "update", 0.9d,
+                        Map.of("siteId", 1), null, Map.of()),
                 context);
         ActionRun waiting = firstStore.find(context.runId()).orElseThrow();
 
@@ -195,7 +215,7 @@ class JdbcRunStoreTest {
 
         JdbcRunStore restartedStore = JdbcRunStore.create(dataSource);
         CountingExecutor restartedExecutor = new CountingExecutor(
-                writeAction("UpdateReport", Set.of(ActionOrigin.AI_PLANNER)),
+                writeAction("UpdateReport", Set.of(ActionProposerType.AI_PLANNER)),
                 ActionExecutionResult.succeeded(Map.of("updated", true)));
         DefaultActionRuntime restartedRuntime = runtime(
                 new InMemoryActionRegistry(List.of(restartedExecutor)),
@@ -219,8 +239,8 @@ class JdbcRunStoreTest {
     void jdbcAndInMemoryStoresRecordEquivalentFinalRuns() {
         InMemoryRunStore inMemoryStore = new InMemoryRunStore();
         JdbcRunStore jdbcStore = store();
-        ActionProposal proposal = ActionProposal.user("CreateReport", Map.of("siteId", 1), "user-1");
-        ActionRegistry registry = registryOf(writeAction("CreateReport", Set.of(ActionOrigin.USER)),
+        ActionProposal proposal = userProposal("CreateReport", Map.of("siteId", 1));
+        ActionRegistry registry = registryOf(writeAction("CreateReport", Set.of(ActionProposerType.USER)),
                 ActionExecutionResult.succeeded(Map.of("reportId", 10)));
 
         DefaultActionRuntime inMemoryRuntime = runtime(registry, inMemoryStore);
@@ -249,11 +269,15 @@ class JdbcRunStoreTest {
     }
 
     private static void applySchema(DataSource dataSource) {
+        applyResource(dataSource, "db/action_run/h2.sql");
+    }
+
+    private static void applyResource(DataSource dataSource, String resource) {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             String schema = new String(
                     JdbcRunStoreTest.class.getClassLoader()
-                            .getResourceAsStream("db/action_run/h2.sql")
+                            .getResourceAsStream(resource)
                             .readAllBytes(),
                     StandardCharsets.UTF_8);
             for (String sql : schema.split(";")) {
@@ -276,7 +300,6 @@ class JdbcRunStoreTest {
                 .actionId("CreateReport")
                 .proposalId(runId + "-proposal")
                 .requesterId("requester-1")
-                .origin(ActionOrigin.USER)
                 .requestChannel(ActionRequestChannel.API)
                 .proposerType(ActionProposerType.USER)
                 .proposalReason("planner rationale")
@@ -317,9 +340,12 @@ class JdbcRunStoreTest {
         return new InMemoryActionRegistry(List.of(new StubExecutor(definition, result)));
     }
 
-    private static ActionDefinition writeAction(String actionId, Set<ActionOrigin> allowedOrigins) {
+    private static ActionDefinition writeAction(
+            String actionId,
+            Set<ActionProposerType> allowedProposerTypes) {
         return new ActionDefinition(actionId, actionId, "", ActionEffect.WRITE, ActionRiskLevel.MEDIUM,
-                allowedOrigins, Set.of(), false, false, true, "", "", Map.of());
+                Set.of(ActionRequestChannel.COMMAND), allowedProposerTypes, Set.of(),
+                false, false, true, "", "", Map.of());
     }
 
     private static void assertMeaningfulRunFields(ActionRun actual, ActionRun expected) {
@@ -330,7 +356,6 @@ class JdbcRunStoreTest {
         assertThat(actual.actionId()).isEqualTo(expected.actionId());
         assertThat(actual.proposalId()).isEqualTo(expected.proposalId());
         assertThat(actual.requesterId()).isEqualTo(expected.requesterId());
-        assertThat(actual.origin()).isEqualTo(expected.origin());
         assertThat(actual.requestChannel()).isEqualTo(expected.requestChannel());
         assertThat(actual.proposerType()).isEqualTo(expected.proposerType());
         assertThat(actual.proposalReason()).isEqualTo(expected.proposalReason());
@@ -348,14 +373,19 @@ class JdbcRunStoreTest {
         assertThat(actual.failureReason()).isEqualTo(expected.failureReason());
     }
 
-    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result) implements ActionExecutor {
+    private static ActionProposal userProposal(String actionId, Map<String, Object> input) {
+        return ActionProposal.userFrom(ActionRequestChannel.COMMAND, actionId, input, "user-1");
+    }
+
+    private record StubExecutor(ActionDefinition definition, ActionExecutionResult result)
+            implements SynchronousActionExecutor {
         @Override
         public ActionExecutionResult execute(io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext context) {
             return result;
         }
     }
 
-    private static final class CountingExecutor implements ActionExecutor {
+    private static final class CountingExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult result;
         private final AtomicInteger calls = new AtomicInteger();

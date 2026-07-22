@@ -1,7 +1,6 @@
 package io.github.flowerjvm.flower.action.runtime.run;
 
 import io.github.flowerjvm.flower.action.runtime.ActionExecutionResult;
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
 import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
 import io.github.flowerjvm.flower.action.runtime.ActionProposal;
 import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
@@ -22,7 +21,6 @@ public record ActionRun(
         String actionId,
         String proposalId,
         String requesterId,
-        ActionOrigin origin,
         ActionRequestChannel requestChannel,
         ActionProposerType proposerType,
         String proposalReason,
@@ -54,7 +52,6 @@ public record ActionRun(
         actionId = normalize(actionId);
         proposalId = normalize(proposalId);
         requesterId = normalize(requesterId);
-        origin = Objects.requireNonNullElse(origin, ActionOrigin.UNKNOWN);
         requestChannel = Objects.requireNonNullElse(requestChannel, ActionRequestChannel.UNKNOWN);
         proposerType = Objects.requireNonNullElse(proposerType, ActionProposerType.UNKNOWN);
         proposalReason = normalize(proposalReason);
@@ -87,7 +84,6 @@ public record ActionRun(
                 .actionId(proposal.actionId())
                 .proposalId(proposal.proposalId())
                 .requesterId(proposal.requesterId())
-                .origin(proposal.origin())
                 .requestChannel(proposal.requestChannel())
                 .proposerType(proposal.proposerType())
                 .proposalReason(proposal.reason())
@@ -117,7 +113,6 @@ public record ActionRun(
                 .actionId(actionId)
                 .proposalId(proposalId)
                 .requesterId(requesterId)
-                .origin(origin)
                 .requestChannel(requestChannel)
                 .proposerType(proposerType)
                 .proposalReason(proposalReason)
@@ -154,7 +149,6 @@ public record ActionRun(
         private String actionId;
         private String proposalId;
         private String requesterId;
-        private ActionOrigin origin;
         private ActionRequestChannel requestChannel;
         private ActionProposerType proposerType;
         private String proposalReason;
@@ -221,11 +215,6 @@ public record ActionRun(
 
         public Builder requesterId(String requesterId) {
             this.requesterId = requesterId;
-            return this;
-        }
-
-        public Builder origin(ActionOrigin origin) {
-            this.origin = origin;
             return this;
         }
 
@@ -340,7 +329,6 @@ public record ActionRun(
                     actionId,
                     proposalId,
                     requesterId,
-                    origin,
                     requestChannel,
                     proposerType,
                     proposalReason,

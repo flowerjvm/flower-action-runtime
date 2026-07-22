@@ -6,6 +6,7 @@ import io.github.flowerjvm.flower.action.runtime.action.ActionExecutionContext;
 import io.github.flowerjvm.flower.action.runtime.action.ActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.action.ActionRiskLevel;
 import io.github.flowerjvm.flower.action.runtime.action.InMemoryActionRegistry;
+import io.github.flowerjvm.flower.action.runtime.action.SynchronousActionExecutor;
 import io.github.flowerjvm.flower.action.runtime.approval.ApprovalDecision;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEvent;
 import io.github.flowerjvm.flower.action.runtime.audit.AuditEventType;
@@ -112,7 +113,8 @@ class ApprovalResumeTest {
         ActionProposal proposal = new ActionProposal(
                 "proposal-duplicate-after-approval",
                 "UpdateReport",
-                ActionOrigin.AI_PLANNER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.AI_PLANNER,
                 "planner",
                 "update",
                 0.9d,
@@ -129,7 +131,8 @@ class ApprovalResumeTest {
                 new ActionProposal(
                         "proposal-duplicate-after-approval-2",
                         "UpdateReport",
-                        ActionOrigin.AI_PLANNER,
+                        ActionRequestChannel.COMMAND,
+                        ActionProposerType.AI_PLANNER,
                         "planner",
                         "retry",
                         0.9d,
@@ -271,7 +274,8 @@ class ApprovalResumeTest {
         return new ActionProposal(
                 proposalId,
                 actionId,
-                ActionOrigin.AI_PLANNER,
+                ActionRequestChannel.COMMAND,
+                ActionProposerType.AI_PLANNER,
                 "planner",
                 "update",
                 0.9d,
@@ -286,10 +290,11 @@ class ApprovalResumeTest {
 
     private static ActionDefinition writeAction(String actionId) {
         return new ActionDefinition(actionId, actionId, "", ActionEffect.WRITE, ActionRiskLevel.MEDIUM,
-                Set.of(ActionOrigin.AI_PLANNER), Set.of(), false, false, true, "", "", Map.of());
+                Set.of(ActionRequestChannel.COMMAND), Set.of(ActionProposerType.AI_PLANNER), Set.of(),
+                false, false, true, "", "", Map.of());
     }
 
-    private static final class CountingExecutor implements ActionExecutor {
+    private static final class CountingExecutor implements SynchronousActionExecutor {
         private final ActionDefinition definition;
         private final ActionExecutionResult result;
         private final AtomicInteger calls = new AtomicInteger();

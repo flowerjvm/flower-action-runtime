@@ -1,29 +1,20 @@
 package io.github.flowerjvm.flower.action.runtime.action;
 
-import io.github.flowerjvm.flower.action.runtime.ActionOrigin;
+import io.github.flowerjvm.flower.action.runtime.ActionProposerType;
+import io.github.flowerjvm.flower.action.runtime.ActionRequestChannel;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/**
- * Declares an action the runtime is allowed to execute through a controlled pipeline.
- *
- * <p>{@code effect}, {@code riskLevel}, {@code allowedOrigins}, {@code dryRunSupported}, and
- * {@code approvalRequiredByDefault} are read by the core pipeline or default policy. {@code auditRequired} is a
- * contract for host/runtime configuration: core emits audit events for every action, while production hosts should
- * provide a durable {@code AuditSink} for actions that require audit retention.</p>
- *
- * <p>{@code requiredPermissions} is a policy input contract. The default core policy gate does not enforce it because
- * core has no actor permission source. Host-specific or external {@code PolicyGate} implementations should compare it
- * with trusted actor permissions supplied by the host application.</p>
- */
+/** Declares an action the runtime is allowed to execute through a controlled pipeline. */
 public record ActionDefinition(
         String actionId,
         String title,
         String description,
         ActionEffect effect,
         ActionRiskLevel riskLevel,
-        Set<ActionOrigin> allowedOrigins,
+        Set<ActionRequestChannel> allowedRequestChannels,
+        Set<ActionProposerType> allowedProposerTypes,
         Set<String> requiredPermissions,
         boolean dryRunSupported,
         boolean approvalRequiredByDefault,
@@ -31,6 +22,13 @@ public record ActionDefinition(
         String inputSchemaId,
         String outputSchemaId,
         Map<String, Object> metadata) {
+
+    private static final Set<ActionRequestChannel> DEFAULT_REQUEST_CHANNELS = Set.of(
+            ActionRequestChannel.UI,
+            ActionRequestChannel.API,
+            ActionRequestChannel.CLI,
+            ActionRequestChannel.COMMAND);
+    private static final Set<ActionProposerType> DEFAULT_PROPOSER_TYPES = Set.of(ActionProposerType.USER);
 
     public ActionDefinition {
         if (actionId == null || actionId.isBlank()) {
@@ -41,16 +39,25 @@ public record ActionDefinition(
         description = description == null ? "" : description.trim();
         effect = Objects.requireNonNullElse(effect, ActionEffect.READ_ONLY);
         riskLevel = Objects.requireNonNullElse(riskLevel, ActionRiskLevel.LOW);
-        allowedOrigins = allowedOrigins == null || allowedOrigins.isEmpty()
-                ? Set.of(ActionOrigin.USER, ActionOrigin.UI, ActionOrigin.API)
-                : Set.copyOf(allowedOrigins);
+        allowedRequestChannels = allowedRequestChannels == null || allowedRequestChannels.isEmpty()
+                ? DEFAULT_REQUEST_CHANNELS
+                : Set.copyOf(allowedRequestChannels);
+        allowedProposerTypes = allowedProposerTypes == null || allowedProposerTypes.isEmpty()
+                ? DEFAULT_PROPOSER_TYPES
+                : Set.copyOf(allowedProposerTypes);
         requiredPermissions = requiredPermissions == null ? Set.of() : Set.copyOf(requiredPermissions);
         inputSchemaId = inputSchemaId == null ? "" : inputSchemaId.trim();
         outputSchemaId = outputSchemaId == null ? "" : outputSchemaId.trim();
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     }
 
-    public boolean allowsOrigin(ActionOrigin origin) {
-        return allowedOrigins.contains(Objects.requireNonNullElse(origin, ActionOrigin.UNKNOWN));
+    public boolean allowsRequestChannel(ActionRequestChannel requestChannel) {
+        return allowedRequestChannels.contains(
+                Objects.requireNonNullElse(requestChannel, ActionRequestChannel.UNKNOWN));
+    }
+
+    public boolean allowsProposerType(ActionProposerType proposerType) {
+        return allowedProposerTypes.contains(
+                Objects.requireNonNullElse(proposerType, ActionProposerType.UNKNOWN));
     }
 }
